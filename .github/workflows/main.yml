@@ -9,7 +9,7 @@ on:
 
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    runs-on: cpu-1
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -26,7 +26,7 @@ jobs:
         run: make check
 
   tests-and-type-check:
-    runs-on: ubuntu-latest
+    runs-on: cpu-1
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
@@ -57,7 +57,7 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   check-docs:
-    runs-on: ubuntu-latest
+    runs-on: cpu-1
     steps:
       - name: Check out
         uses: actions/checkout@v4
