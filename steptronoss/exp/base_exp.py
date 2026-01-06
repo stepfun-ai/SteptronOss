@@ -1,0 +1,1167 @@
+import copy
+from functools import cached_property
+import os
+import torch
+import torch.distributed
+from torch import Tensor
+from loguru import logger
+
+from typing import Any, Callable, ForwardRef, Iterable, Iterator, Literal, NoReturn, Optional
+
+from torch.nn import Module, Parameter
+
+from configurize import Config, Ref, writable_property
+from steptronoss.exp.abstract import (
+    OptimizerConfig as AbstractOptimizerConfig,
+    SchedulerConfig as AbstractSchedulerConfig,
+    MetricConfig as AbstractMetricConfig,
+    TrainerConfig as AbstractTrainerConfig,
+    TokenizerConfig as AbstractTokenizerConfig,
+    ParallelConfig as AbstractParallelConfig,
+    ModelConfig as AbstractModelConfig,
+)
+
+
+TrainerHook = Callable[[ForwardRef("Trainer")], NoReturn]
+
+
+def is_log_rank() -> bool:
+    return int(os.getenv("RANK", "0")) == 0
+
+
+class OptimizerConfig(AbstractOptimizerConfig):
+    optimizer: Literal["adam", "muon"] = "adam"
+
+    weight_decay: float = 0.01
+    weight_decay_on_1d_params: bool = False
+
+    use_distributed_optimizer: bool = True
+
+    clip_grad: float = 1.0
+
+    params_dtype: torch.dtype = Ref("..model_cfg.params_dtype")
+
+    lr: float = Ref("..scheduler_cfg.lr")
+
+    weight_decay: float = Ref("..scheduler_cfg.weight_decay")
+
+    use_contiguous_buffers_in_local_ddp: bool = Ref(
+        "..model_cfg.use_contiguous_buffers_in_local_ddp"
+    )
+
+    log_detailed_grad_norms: bool = Ref("..trainer_cfg.log_detailed_grad_norms")
+
+    log_num_zeros_in_grad: bool = Ref("..trainer_cfg.log_num_zeros_in_grad")
+
+    # adam-specific hyperparams
+    adam_eps: float = 1e-8
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.95
+
+    # muon-specific hyperparams
+    muon_matched_adamw_rms: float = 0.2
+    muon_momentum: float = 0.95
+    muon_nesterov: bool = True
+    muon_ns_steps: int = 5
+    muon_newtonschulz_fn: str = "polar_express"
+    muon_run_ns_in_fp32: bool = False
+    muon_run_ns_in_fp16: bool = True
+    muon_log_updates_grad_norms: bool = False
+    muon_batch_compute_mem_size: int = 128 * 1024 * 1024
+    muon_auto_applier_attn_pack_param_strategy: str = "split_by_type"
+    muon_auto_applier_glu_pack_param_strategy: str = "split_by_type"
+
+    def scale_lr_func(self, name: str, param: Parameter) -> float:
+        if hasattr(param, "_lr_scale"):
+            return param._lr_scale
+        return 1.0
+
+    def scale_wd_cond(self, name: str, param: Parameter) -> float:
+        if name.endswith(".bias") or (
+            len(param.shape) == 1 and not self.weight_decay_on_1d_params
+        ):
+            return 0.0
+        return 1.0
+
+    def build_loss_scaler(self) -> Any:
+        from steptron.optimizer import ConstantGradScaler
+
+        grad_scaler = ConstantGradScaler(1.0)
+        return grad_scaler
+
+    def build_optimizer(self, model: Module) -> Any:
+        # Base optimizer.
+
+        from steptron.optimizer import Adam, advanced_get_param_groups
+        from steptron.optimizer.distrib_optimizer import DummyOptimizer
+        from steptron.optimizer.local_dp_optimizer import LocalDPOptimizer
+        from steptron.optimizer.muon import Muon
+        from steptron.optimizer.optimizer import Float16OptimizerWithFloat16Params
+        from steptron.utils import convert_num
+
+        extra_tags = dict()
+        if self.optimizer == "muon":
+            # make sure prepare_model_for_muon is called in setup_model
+            # copy muon flag into param groups' tags
+            extra_tags["use_muon"] = lambda name, param: getattr(
+                param, "is_muon_param", False
+            )
+
+        # param_groups = get_param_groups(model, None, get_vision_tower_lr)
+        param_groups = advanced_get_param_groups(
+            model,
+            scale_lr_cond=self.scale_lr_func,
+            scale_wd_cond=self.scale_wd_cond,
+            **extra_tags,
+        )
+
+        for idx, group in enumerate(param_groups):
+            extra = "; ".join([f"{k}: {v}" for k, v in group.items() if k != "params"])
+            logger.info(
+                f"optimizer group {idx} -> number of parameters: "
+                f"{convert_num(sum([p.nelement() for p in group['params']]))}; "
+                f"{extra}"
+            )
+
+        if len(param_groups) == 0:
+            optimizer = DummyOptimizer()
+        elif self.optimizer == "adam":
+            optimizer = Adam(
+                param_groups,
+                lr=self.lr,
+                weight_decay=self.weight_decay,
+                betas=(self.adam_beta1, self.adam_beta2),
+                eps=self.adam_eps,
+            )
+        elif self.optimizer == "muon":
+            optimizer = Muon(
+                param_groups,
+                lr=self.lr,
+                weight_decay=self.weight_decay,
+                matched_adamw_rms=self.muon_matched_adamw_rms,
+                momentum=self.muon_momentum,
+                nesterov=self.muon_nesterov,
+                ns_steps=self.muon_ns_steps,
+                adamw_betas=(self.adam_beta1, self.adam_beta2),
+                adamw_eps=self.adam_eps,
+                run_ns_in_fp32=self.muon_run_ns_in_fp32,
+                run_ns_in_fp16=self.muon_run_ns_in_fp16,
+                log_muon_updates_grad_norms=self.muon_log_updates_grad_norms,
+                newtonschulz_fn=self.muon_newtonschulz_fn,
+                batch_compute_mem_size=self.muon_batch_compute_mem_size,
+            )
+        else:
+            raise ValueError(f"Invalid optimizer: {self.optimizer}")
+
+        # Mixed precision optimizer.
+        # - Note: both the Float16Optimizer and the DistributedOptimizer inherit
+        #   from the MixedPrecisionOptimizer, which manages any optimizer where
+        #   the model params and main params are distinct.
+        if (
+            self.params_dtype in [torch.float16, torch.bfloat16]
+            or self.use_distributed_optimizer
+        ):
+            grad_scaler = self.build_loss_scaler()
+            optimizer_cls = (
+                LocalDPOptimizer
+                if self.use_distributed_optimizer
+                else Float16OptimizerWithFloat16Params
+            )
+            return optimizer_cls(
+                optimizer,
+                clip_grad=self.clip_grad,
+                log_num_zeros_in_grad=self.log_num_zeros_in_grad,
+                params_have_main_grad=True,
+                use_contiguous_buffers_in_local_ddp=self.use_contiguous_buffers_in_local_ddp,
+                fp16=self.params_dtype == torch.float16,
+                bf16=self.params_dtype == torch.bfloat16,
+                params_dtype=self.params_dtype,
+                grad_scaler=grad_scaler,
+                models=model,
+            )
+        raise NotImplementedError
+
+    def sanity_check(self) -> None:
+        super().sanity_check()
+        if self.optimizer == "muon":
+            assert int(self.muon_run_ns_in_fp16) + int(self.muon_run_ns_in_fp32) <= 1
+            assert self.use_contiguous_buffers_in_local_ddp
+
+            if self.muon_log_updates_grad_norms:
+                assert self.log_detailed_grad_norms
+
+            assert self.muon_auto_applier_attn_pack_param_strategy in [
+                "split_by_head",
+                "split_by_type",
+                "no_split",
+            ]
+            assert self.muon_auto_applier_glu_pack_param_strategy in [
+                "split_by_type",
+                "no_split",
+            ]
+
+
+class SchedulerConfig(AbstractSchedulerConfig):
+
+    lr: float = 1e-4
+    """Initial learning rate. Depending on decay style and initial warmup,
+    the learing rate at each iteration would be different."""
+
+    min_lr: float = 0.0
+    """Minumum value for learning rate. The scheduler clip values below this threshold."""
+
+    weight_decay: float = 0.01
+    """Weight decay coefficient for L2 regularization."""
+
+    total_schedule: float = 1e12
+    """Scheduled count for lr scheduler"""
+
+    warmup_schedule: float = 100e6
+    """Scheduled count for warm up"""
+
+    scheduler_unit: Literal["iter", "sample", "token"] = "iter"
+    """How to update scheduler counter ('iter'|'sample'|'token')"""
+
+    def sanity_check(self) -> None:
+        assert self.min_lr <= self.lr
+        assert self.scheduler_unit in ["iter", "sample", "token"]
+
+    def build_scheduler(self, optimizer: Any, *args: Any) -> Any:
+        from steptron.optimizer.hparam_scheduler import FuncConstant, Scheduler
+
+        scheduler = Scheduler(
+            optimizer=optimizer,
+            base_lr=self.lr,
+            base_wd=self.weight_decay,
+            lr_func=FuncConstant(
+                n=self.total_schedule,
+                warmup=self.warmup_schedule,
+                min_scale=self.min_lr / self.lr,
+            ),
+            wd_func=lambda x: 1.0,  # constant is ok
+        )
+
+        return scheduler
+
+
+class MetricConfig(AbstractMetricConfig):
+    _allow_set_new_attr: bool = True
+
+    def to_dict(self, rep: bool = False) -> dict[str, str]:
+        return {k: repr(v) for k, v in self.items()}
+
+    def register_metric(self) -> None:
+        """This Function define all metrics used.
+        NOTE: do NOT call super().register_metric(), the register_metric() of all
+        fathers will be called automatically.
+        """
+        from steptron.utils.metrics import GradNormMetric, Metric
+
+        self.consumed_tokens = Metric().sum("time").sum("dp")
+        self.iteration_time = Metric().mean("time")
+        self.learning_rate = Metric().mean("time")
+        self.grad_norms = GradNormMetric()
+
+    def register(self) -> None:
+        """Register self to global metric holder."""
+        from steptron.utils import GlobalMetrics
+
+        GlobalMetrics.batch_register(self)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        for cls in reversed(self.__class__.mro()):
+            if hasattr(cls, "register_metric"):
+                cls.register_metric(self)
+
+
+class TrainerConfig(AbstractTrainerConfig):
+    micro_batch_size: int = 1
+    global_batch_size: int = 10
+    global_seq_length: int = 8192
+    train_iters: int = 10000
+
+    offload_optimizer_state: bool = False
+
+    non_blocking_offload: bool = True
+
+    data_parallel_random_init: bool = False
+    """Use different seed for different dp rank"""
+
+    global_data_keys: Optional[list[str]] = Ref("..data_cfg.global_data_keys", None)
+    """When set, broadcast data[key] to all ranks (not only on data-source ranks)."""
+
+    empty_unused_memory_level: int = 0
+
+    log_detailed_grad_norms: bool = False
+
+    enable_prefetch_data: bool = False
+    """If set, trainer will prefetch data of one global-batch before run PP schedule.
+    Use micro-batch level steaming fetch otherwise.
+    """
+
+    log_num_zeros_in_grad: bool = True
+
+    log_interval: int = 10
+
+    # writer_backend: available backends are "tensorboard", "wandb"
+    # support multiple backends
+    writer_backend: list[str] = ["tensorboard"]
+
+    def make_logs(
+        self, iteration: int, metrics: dict[str, Tensor], tb_writer: Any = None
+    ) -> dict[str, Any]:
+        """Handle custom metrics and decide which goes tensorboard & which goes log file
+        NOTE: tb_writer only available on RANK_LAST
+
+        Args:
+            iteration (int): Current iteration.
+            metrics (dict[str, Tensor]): A dict of reduced metrics, metrics might need
+                type cast.
+            tb_writer (TensorBoardWriter, optional): TB writer (if available). Defaults to None.
+
+        Returns:
+            dict: A dict of SCALAR print to logfile/screen
+        """
+        from steptron.utils.metrics import GlobalMetrics, HistogramMetric
+
+        if tb_writer is not None:
+            scalars = {
+                k: v.float()
+                for k, v in metrics.items()
+                if (torch.is_tensor(v) and v.numel() == 1)
+            }
+            scalars.update(
+                {k: v for k, v in metrics.items() if isinstance(v, (float, int))}
+            )
+
+            vector_metrics = {
+                k: v
+                for k, v in metrics.items()
+                if (torch.is_tensor(v) and v.numel() > 1)
+            }
+            for key in scalars:
+                tb_writer.add_scalar(key, scalars[key], iteration)
+            for key in vector_metrics:
+                if isinstance(GlobalMetrics.metrics[key], HistogramMetric):
+                    tb_writer.add_histogram(
+                        str(key), vector_metrics[key].cpu().float().flatten(), iteration
+                    )
+            # NOTE: add text metric to tb logic
+            text_metrics = {
+                k: v
+                for k, v in metrics.items()
+                if isinstance(v, list) and len(v) > 0 and isinstance(v[0], str)
+            }
+            for key in text_metrics:
+                for idx, text in enumerate(text_metrics[key]):
+                    tb_writer.add_text(f"{key}_{idx}", text, iteration)
+
+        return {}
+
+    def is_data_source(self) -> bool:
+        from steptron.core.parallel_state import PM
+
+        # build dataloaders only on data-source nodes
+        # (PP0||PPLast) && TP0 && CP0
+        #
+        # Note: `sync_get_data()` only calls `next(data_iterator)` on CP-src rank
+        # (and then broadcasts within CP group). So we should only build
+        # dataloaders on CP-src to avoid duplicated loader processes/threads.
+        return (PM.i_am("PP", 0) or PM.i_am("PP", -1)) and (
+            PM.i_am("TP", 0) and PM.i_am("CP", 0)
+        )
+
+    def sync_get_data(self, data_iterator: Iterator[Any]) -> dict[str, Any]:
+        # This function Get/Broadcast/Preprocess and return data ready-to-use
+        from steptron.core.parallel_state import PM
+        from steptron.core.parallel_state import (
+            get_virtual_pipeline_model_parallel_rank,
+            get_virtual_pipeline_model_parallel_world_size,
+        )
+        from steptron.timers import get_timers
+        from steptron.utils import broadcast_tensors
+
+        class NonOfHeadOrTail(dict):
+            pass
+
+        rank = torch.distributed.get_rank()
+        if PM.i_am("PP", 0) or PM.i_am("PP", -1):
+            with get_timers().record("dataloader-next", log_level=2):
+                if PM.i_am("TP", 0):
+                    if PM.i_am("CP", 0):
+                        data = next(data_iterator)
+                    else:
+                        data = None
+                    with get_timers().record("broadcast-tensors-cp", log_level=2):
+                        data = broadcast_tensors(
+                            data,
+                            src_rank=PM.ranks_of("CP")[0],
+                            group=PM.group_of("CP"),
+                            move_to_cuda=True,
+                        )
+                else:
+                    data = None
+
+            with get_timers().record("broadcast-tensors-tp", log_level=2):
+                data = broadcast_tensors(
+                    data,
+                    src_rank=PM.ranks_of("TP")[0],
+                    group=PM.group_of("TP"),
+                )
+        else:
+            data = NonOfHeadOrTail()  # Mark these ranks for global_data broadcast
+
+        if self.global_data_keys:
+            vpp_rank = get_virtual_pipeline_model_parallel_rank() or 0
+            vpp_size = get_virtual_pipeline_model_parallel_world_size() or 1
+            with get_timers().record("broadcast-tensors-pp", log_level=2):
+                if vpp_rank == 0:
+                    pp_sync_data = [data.__class__] + [
+                        data.get(k, None) for k in self.global_data_keys
+                    ]
+                    pp_sync_data = broadcast_tensors(
+                        pp_sync_data,
+                        src_rank=PM.ranks_of("PP")[0],
+                        group=PM.group_of("PP"),
+                    )
+                    # cache pp_sync_data for the following model chunks
+                    if not hasattr(self, "_cached_pp_sync_data"):
+                        self._cached_pp_sync_data = [[] for _ in range(vpp_size - 1)]
+                    for _vp in range(vpp_size - 1):
+                        self._cached_pp_sync_data[_vp].append(
+                            copy.deepcopy(pp_sync_data)
+                        )
+                else:
+                    pp_sync_data = self._cached_pp_sync_data[vpp_rank - 1].pop(0)
+
+            if isinstance(data, NonOfHeadOrTail):
+                data_class = pp_sync_data.pop(0)
+                data_items = dict(zip(self.global_data_keys, pp_sync_data))
+                data = data_class(**data_items)
+        if isinstance(data, NonOfHeadOrTail):
+            data = dict()
+        return data
+
+    def build_after_init_hooks(self) -> list[TrainerHook]:
+        """\
+        Build hooks to run after steptron initialized (before building models).
+        A hook is a `Callable[[Trainer], []]`
+        """
+        from steptron.utils import profile_allreduce
+
+        def profile_nccl(trainer):
+            # NOTE This profile is neccessary for batched_p2p_comm (not using overlap_p2p_comm)
+            # since batch_isend_irecv with group require collective op applied before.
+            profile_allreduce()
+
+        def print_exp(trainer):
+            if is_log_rank():
+                logger.info(self.root())
+
+        hooks: list[TrainerHook] = [
+            profile_nccl,
+            self.root().register_metrics,
+            print_exp,
+        ]
+
+        return hooks
+
+    def build_before_train_hooks(self) -> list[TrainerHook]:
+        """\
+        Build hooks to run after training.
+        A hook is a `Callable[[Trainer], []]`
+        """
+
+        def check_uninitialized_model_weight(trainer):
+            from steptron.core.parallel_state import PM
+            from steptron.utils.utils import unwrap_model
+
+            if hasattr(trainer, "models") and PM.i_am("DP", 0) and PM.i_am("TP", 0):
+                uninitialized_keys = []
+                for model in trainer.models:
+                    model = unwrap_model(model)
+                    for name, param in model.named_parameters():
+                        if not getattr(param, "has_initialized", False):
+                            uninitialized_keys.append(name)
+                if uninitialized_keys:
+                    logger.warning(
+                        f"The following parameters are not marked as initialized. "
+                        f"Please add 'init_model_weight' method in the corresponding module or its parent module "
+                        f"and mark parameters with 'has_initialized=True' after initialization:  {uninitialized_keys}"
+                    )
+
+        return [
+            check_uninitialized_model_weight,
+        ]
+
+    def build_before_step_hooks(self) -> list[TrainerHook]:
+        """\
+        Build hooks to run before each step.
+        A hook is a `Callable[[Trainer], []]`
+        """
+        return []
+
+    def build_after_step_hooks(self) -> list[TrainerHook]:
+        """\
+        Build hooks to run after each step.
+        A hook is a `Callable[[Trainer], []]`
+        """
+        return []
+
+    def build_after_train_hooks(self) -> list[TrainerHook]:
+        """\
+        Build hooks to run after training.
+        A hook is a `Callable[[Trainer], []]`
+        """
+        return []
+
+    def get_trainer_cls(self) -> type:
+        raise NotImplementedError
+
+
+class TokenizerConfig(AbstractTokenizerConfig):
+    vocab_size: int = 65536
+
+    make_vocab_size_divisible_by: int = 128
+
+    tokenizer_path: Optional[str] = None
+
+    tensor_model_parallel_size: int = Ref("..model_cfg.tensor_model_parallel_size", 1)
+
+    @writable_property
+    def padded_vocab_size(self) -> int:
+        from steptron.utils import make_divisible
+
+        return make_divisible(
+            self.vocab_size,
+            self.make_vocab_size_divisible_by * self.tensor_model_parallel_size,
+        )
+
+    def build_tokenizer(self) -> Any:
+        pass
+
+
+class SaveOptions(Config):
+    """Option Config, use True for load
+
+    options.none(but=['model']) for load model only
+
+    options.all(but=['optimizer']) for NOT load optimizer only.
+    """
+
+    # escape dup-name check
+    _is_tree_node: bool = False
+
+    model: bool = True
+    optimizer: bool = True
+    scheduler: bool = True
+    data: bool = True
+    rng_state: bool = True
+
+    def all(self, but: list[str] = []) -> "SaveOptions":
+        for k, _ in self.items():
+            setattr(self, k, k not in but)
+        return self
+
+    def none(self, but: list[str] = []) -> "SaveOptions":
+        for k, _ in self.items():
+            setattr(self, k, k in but)
+        return self
+
+
+class LoadOptions(SaveOptions):
+    model: bool = True
+    optimizer: bool = True
+    scheduler: bool = True
+    data: bool = True
+    exp: bool = True
+    iter: bool = True
+    rng_state: bool = True
+
+
+class CheckpointConfig(Config):
+    auto_resume: bool = True
+
+    load_path: Optional[str] = None
+
+    save_dir: str = "./"
+
+    save_interval: int = 100
+
+    async_dump: bool = True
+
+    load_option: type[LoadOptions] = LoadOptions
+    load_safetensors: bool | str = False
+    """Load weight from safetensors. If True, load 'load_path/hf'; if str, load the value."""
+
+    save_option: type[SaveOptions] = SaveOptions
+    save_safetensors: bool = False
+    """If set, dump an extra hf weight to 'save_path/hf'"""
+
+    broadcast_from_dp0: bool = True
+
+    strict_load_model: bool = True
+
+    use_distributed_optimizer: bool = Ref(
+        "..optimizer_cfg.use_distributed_optimizer", False
+    )
+
+    data_parallel_random_init: bool = Ref(
+        "..trainer_cfg.data_parallel_random_init", False
+    )
+
+    exp_name: str = Ref("..exp_name", "")
+
+    # Enable online reshard of distributed optimizer state when DP size changes.
+    reshard_optimizer_state: bool = False
+    reshard_optimizer_strict: bool = True
+
+    # for save_safetensors reference
+    model_config_path: Optional[str] = None
+
+    tokenizer_path: Optional[str] = None
+
+    @writable_property
+    def save_path(self) -> str:
+        return os.path.join(self.save_dir, self.exp_name)
+
+    def sanity_check(self) -> None:
+        super().sanity_check()
+        assert not (
+            self.load_safetensors and self.load_path
+        ), "load_safetensors and load_path cannot be set at the same time"
+
+
+class MoEConfig(Config):
+    use_moe: bool = False
+    moe_every_n_layer: int = 1
+    moe_num_experts: int = 1
+    moe_top_k: int = 1
+    moe_aux_loss_coef: float = 1e-2
+    moe_hidden_size: int = 12288
+    norm_expert_weight: bool = True
+
+    use_ep_group_wise_aux_loss: bool = False
+    """Enable expert group-wise auxiliary loss"""
+
+    moe_style: Literal["mixtral", "marco", "old"] = "marco"
+    """moe imple style, one of ['mixtral', 'marco', 'old']"""
+
+    moe_layer_list: Optional[list[int]] = None
+    """layer ids of layers which use moe"""
+
+    share_expert_dim: int = 0
+    """Dimension of shared moe ffn"""
+
+    moe_enable_group_gemm: bool = False
+    use_groupgemm_bwd: bool = True
+
+    use_fp32_router_for_moe: bool = True
+
+    # deepep settings for expert parallel acceleration
+    moe_enable_deepep: bool = False
+    """Enable DeepEP acceleration for expert parallel when EP>1 and ETP=1"""
+    moe_deepep_num_sms: int = 0
+    """Number of SMs to use for DeepEP kernels, 0 means auto-detect"""
+    moe_permute_fusion: bool = False
+    """Enable permutation fusion in DeepEP"""
+
+    # ===========================================================================================
+    # deepseekv3 new features
+    enable_auxiliary_loss_free_load_balance: bool = (
+        False  # enable auxiliary loss free load balance
+    )
+    enable_sigmoid_router: bool = False  # enable sigmoid router
+    enable_scaling_factor: bool = False  # enable scaling factor in moe
+    router_bias_update_rate: float = (
+        1e-4  # update rate in auxiliary loss free load balance
+    )
+    routed_scaling_factor: float = 1.0  # scaling factor for moe
+    # ===========================================================================================
+
+    distribute_saved_activations: bool = Ref("..distribute_saved_activations", False)
+
+    data_parallel_size: int = Ref("..data_parallel_size")
+    global_batch_size: int = Ref("...trainer_cfg.global_batch_size")
+    micro_batch_size: int = Ref("...trainer_cfg.micro_batch_size")
+
+    # for debug only
+    enable_force_balance: bool = False
+
+    def get_aux_loss_calib_scale(self) -> float:
+        """aux loss is local, and cannot percept grad_acc_steps, let's scale the coef instead."""
+        from steptron.core.parallel_state import PM
+
+        if self.moe_aux_loss_coef != 0 and PM.size_of("CP") > 1:
+            assert self.use_ep_group_wise_aux_loss, (
+                "For CP size > 1, because only EP-group-wise MoE aux loss is validated, "
+                "so currently we only support EP-group-wise MoE aux loss, "
+                "(set use_ep_group_wise_aux_loss=True or disable moe_aux_loss_coef)."
+            )
+        return (
+            self.micro_batch_size * self.data_parallel_size
+        ) / self.global_batch_size
+
+
+class PPConfig(Config):
+    """NOTE: this is a run-time build config, do not belongs to Exp."""
+
+    pp_rank: int = 0
+    pp_size: int = 1
+
+    pp_seq_length: int = 1024
+    pp_hidden_size: int = 1024
+    pp_micro_batch_size: int = 1
+    pp_comm_type: torch.dtype = torch.bfloat16
+
+    @property
+    def pp_comm_shape(self) -> tuple[int, int, int]:
+        return (self.pp_seq_length, self.pp_micro_batch_size, self.pp_hidden_size)
+
+    variable_seq_lengths: bool = False
+
+    overlap_dp_vpp: bool = False
+    overlap_p2p_comm: bool = True
+    check_nan: bool = True
+
+    scatter_gather_tensors_in_pipeline: bool = False
+
+    sequence_parallel: bool = False
+
+
+class ParallelConfig(AbstractParallelConfig):
+    parallel_definition: dict[str, str] = {
+        "TP": "(p d t) -> (p d) t",
+        "PP": "(p d t) -> (d t) p",
+        "DP": "(p d t) -> (p t) d",
+        "CP": "(p d c t) -> (p d t) c",
+        "MP": "(p d t) -> d (p t)",
+        "EP": "(p edp c ep etp) -> (p c edp etp) ep",
+        "ETP": "(p edp c ep etp) -> (p c edp ep) etp",
+        "EDP": "(p edp c ep etp) -> (p c ep etp) edp",
+        "EMP": "(p edp c ep etp) -> edp (p c ep etp)",
+    }
+
+    tensor_model_parallel_size: int = 1
+    pipeline_model_parallel_size: int = 1
+    expert_model_parallel_size: int = 1
+    context_parallel_size: int = 1
+    expert_tensor_parallel_size: int = 1
+
+    # Not a real parallel
+    virtual_pipeline_model_parallel_size: int = 1
+
+    def build_parallel(self) -> dict[str, list[list[int]]]:
+        from steptron.core.parallel_state import PM
+
+        args = {
+            "p": self.pipeline_model_parallel_size,
+            "c": self.context_parallel_size,
+            "ep": self.expert_model_parallel_size,
+            "t": self.tensor_model_parallel_size,
+            "etp": self.expert_tensor_parallel_size,
+        }
+
+        parallel_groups = {
+            k: PM.define_parallel(v, **args)
+            for k, v in self.parallel_definition.items()
+        }
+
+        return parallel_groups
+
+
+class MegatronTPModelConfig(AbstractModelConfig):
+    parallel_cfg: type[ParallelConfig] = ParallelConfig
+
+    params_dtype: torch.dtype = torch.bfloat16
+
+    sequence_parallel: bool = False
+
+    tensor_model_parallel_size: int = Ref(".parallel_cfg.tensor_parallel_size")
+
+    use_cpu_initialization: bool = False
+    perform_initialization: bool = True
+    gradient_accumulation_fusion: bool = True
+    async_tensor_model_parallel_allreduce: bool = True
+
+    def get_tp_kwargs(self) -> dict[str, Any]:
+        return {
+            "params_dtype": self.params_dtype,
+            "use_cpu_initialization": self.use_cpu_initialization,
+            "perform_initialization": self.perform_initialization,
+            "gradient_accumulation_fusion": self.gradient_accumulation_fusion,
+            "sequence_parallel_enabled": self.sequence_parallel,
+        }
+
+
+class MegatronOptimizedModelConfig(AbstractModelConfig):
+    params_dtype: torch.dtype = torch.bfloat16
+
+    scatter_gather_tensors_in_pipeline: bool = True
+    overlap_p2p_comm: bool = True
+
+    # Used for P2P comm pre-allocation
+    seq_length: int = Ref("..trainer_cfg.global_seq_length", 4096)
+    micro_batch_size: int = Ref("..trainer_cfg.micro_batch_size", 1)
+
+    DDP_impl: str = "local"
+    overlap_dp_vpp: bool = False
+    use_contiguous_buffers_in_local_ddp: bool = True
+    distribute_saved_activations: bool = False
+
+    check_nan: bool = True
+    """check nan on every rank"""
+
+    embedding_weights_in_fp32: bool = False
+    accumulate_allreduce_grads_in_fp32: bool = True
+    gradient_accumulation_fusion: bool = True
+
+    use_flash_attn: bool = True
+    variable_seq_lengths: bool = False  # disable for pretrain
+
+
+class Megatron3DParallelModelConfig(
+    MegatronTPModelConfig, MegatronOptimizedModelConfig
+):
+    parallel_cfg = ParallelConfig
+
+    global_seq_length = Ref("..trainer_cfg.global_seq_length", 4096)
+
+    @property
+    def seq_length(self):
+        return self.global_seq_length // self.parallel_cfg.context_parallel_size
+
+    @property
+    def data_parallel_size(self):
+        return int(os.getenv("WORLD_SIZE", "1")) // (
+            self.parallel_cfg.tensor_model_parallel_size
+            * self.parallel_cfg.pipeline_model_parallel_size
+            * self.parallel_cfg.context_parallel_size
+        )
+
+class RoPEConfig(Config):
+
+    rope_type: str = "llama3"
+    factor: float = Ref("..ntk_interp_ratio", 1.0)
+    original_max_position_embeddings: int = Ref("..max_position_embeddings", None)
+    low_freq_factor: float = Ref("..yarn_beta_slow", None)
+    high_freq_factor: float = Ref("..yarn_beta_fast", None)
+
+    def sanity_check(self):
+        super().sanity_check()
+        assert self.rope_type in ["llama3"]
+        if self.factor != 1:
+            assert isinstance(self.original_max_position_embeddings, int)
+            assert isinstance(self.low_freq_factor, float)
+            assert isinstance(self.high_freq_factor, float)
+
+
+class ModelConfig(Megatron3DParallelModelConfig):
+    _allow_search = True
+    critical_keys = ["hidden_size", "ffn_hidden_size", "rope_theta"]
+
+    vocab_size: int = Ref("..tokenizer_cfg.padded_vocab_size", 65536)
+    actual_vocab_size: int = Ref("..tokenizer_cfg.vocab_size", None)
+
+    hidden_size: int = 12288
+    ffn_hidden_size: int = 31232
+    num_layers: int = 12
+    num_attention_heads: int = 96
+    num_sliding_attention_heads: int = None  # 如果为 None 则使用 num_attention_heads
+
+    use_headwise_attn_gate: bool = False
+    sliding_window_size: int = -1
+    layer_types: list[str] = None
+
+    @writable_property
+    def head_dim(self):
+        if self.mfa_kv_channels is not None:
+            return self.mfa_kv_channels
+        return self.hidden_size // self.num_attention_heads
+
+    qk_rope_head_dim: int | list[int] = None
+    """head_dim of rope, if not set, use head_dim; if list[int], different for each layer."""
+
+    num_attention_groups: int = 8
+    attention_type: str = "gqa"
+    """Attention Type: one of ['gqa', 'mfa']"""
+    mfa_q_channels: int = Ref(".mfa_kv_channels")
+    mfa_kv_channels: int = None
+    mfa_use_inter_norm = False
+    rope_theta: float | list[float] = 500_000.0
+    """theta in RoPE, if list, different for each layer."""
+
+    rms_norm_zero_gamma: bool = False
+    layernorm_epsilon: float = 1e-05
+    attention_dropout: float = 0.0
+
+    moe_cfg = MoEConfig
+
+    use_vpp_v2 = False
+    gather_output = False
+
+    # Simple Optimization
+    recompute_granularity: str = None
+    recompute_num_layers: int = 0
+    recompute_pre_mlp_layernorm: bool = False
+    recompute_attention_layernorm: bool = False
+    recompute_qknorm_rope: bool = False  # 添加这一行
+    recompute_cp_kv: bool = False
+    recompute_logits: bool = False
+    continuous_memory_ffn: bool = False
+    use_fused_qknorm_and_rope: bool | list[bool] = False
+
+    detect_abnormal_data: bool = False
+
+    # precisions
+    fp32_lm_head_out: bool = False
+    fp32_residual_connection: bool = False
+    fp32_rms_norm: bool = True
+    use_optimus_rope: bool = False
+
+    # rope
+    rope_cfg = RoPEConfig
+
+    yarn_beta_fast: float = 32.0
+    yarn_beta_slow: float = 1.0
+    ntk_interp_ratio: float = 1.0
+    max_position_embeddings: int = None
+
+    disable_qk_norm: bool = False
+    use_qkv_bias: bool = False
+
+    # WARNING: FOR EXPERT ONLY
+    use_optimus_fuse_silu_dot: bool = True
+    use_optimus_rms_norm: bool = True
+    use_optimus_embedding: bool = True
+    use_kernel_rms_norm: bool = True
+
+    use_optimus_attn_sigmoid_gate: bool = False
+
+    swiglu_recompute_silu_out_proj: bool = True
+
+    log_attn_maximum_logits: bool = False
+    log_attn_gate: bool = False
+
+    # for clip sliu
+
+    use_swiglu_limit: float | list[float] = None
+    use_swiglu_limit_shared: float | list[float] = None
+
+    # For muon
+    muon_auto_applier_attn_pack_param_strategy = Ref(
+        "..optimizer_cfg.muon_auto_applier_attn_pack_param_strategy"
+    )
+    muon_auto_applier_glu_pack_param_strategy = Ref(
+        "..optimizer_cfg.muon_auto_applier_glu_pack_param_strategy"
+    )
+
+    def build_model(self):
+        raise NotImplementedError
+
+    def sanity_check(self):
+        assert self.attention_type in ["gqa", "mfa"]
+        if self.layer_types:
+            assert len(self.layer_types) == self.num_layers
+        if self.moe_cfg.use_moe:
+            assert (
+                self.moe_cfg.moe_num_experts % self.parallel_cfg.expert_model_parallel_size
+                == 0
+            )
+            assert self.moe_cfg.moe_top_k <= self.moe_cfg.moe_num_experts
+            if self.parallel_cfg.expert_model_parallel_size > 1 and self.moe_cfg.moe_enable_group_gemm:
+                assert self.moe_cfg.moe_enable_deepep, (
+                    "When expert_model_parallel_size > 1, grouped gemm(moe_enable_group_gemm=True) "
+                    "requires DeepEP, set moe_enable_deepep to True"
+                )
+            if self.moe_cfg.moe_enable_deepep:
+                assert self.parallel_cfg.expert_model_parallel_size > 1, (
+                    "DeepEP requires expert model parallel size > 1, set expert_model_parallel_size "
+                    "larger than 1 or disable DeepEP by setting moe_enable_deepep to False"
+                )
+        else:
+            assert self.parallel_cfg.expert_model_parallel_size == 1
+
+        if self.params_dtype == torch.bfloat16:
+            assert (
+                self.accumulate_allreduce_grads_in_fp32 == True
+            ), "accumulate and all-reduce gradients in fp32 for bfloat16 data type."
+        if self.accumulate_allreduce_grads_in_fp32:
+            assert self.DDP_impl == "local"
+            assert self.use_contiguous_buffers_in_local_ddp
+        if (
+            self.parallel_cfg.virtual_pipeline_model_parallel_size > 1
+            or self.parallel_cfg.pipeline_model_parallel_size > 1
+        ):
+            assert self.DDP_impl == "local"
+        assert self.DDP_impl == "local"  # disable torch DDP for now
+
+        if self.fp32_residual_connection:
+            assert self.params_dtype in [
+                torch.float16,
+                torch.bfloat16,
+            ], "residual connection in fp32 only supported when using fp16 or bf16."  # noqa
+
+        if self.distribute_saved_activations:
+            assert self.parallel_cfg.tensor_model_parallel_size > 1, (
+                "can distribute "
+                "recomputed activations only across tensor model "
+                "parallel groups"
+            )
+            assert self.recompute_granularity == "full", (
+                "distributed recompute activations is only "
+                "application to full recompute granularity"
+            )
+        if self.parallel_cfg.tensor_model_parallel_size == 1:
+            assert self.sequence_parallel == False
+
+        if self.sequence_parallel:
+            assert self.async_tensor_model_parallel_allreduce == False
+
+        if self.overlap_p2p_comm and not self.sequence_parallel:
+            self.scatter_gather_tensors_in_pipeline = False
+
+        if (
+            os.getenv("CUDA_DEVICE_MAX_CONNECTIONS", None) != "1"
+        ):
+            assert not self.sequence_parallel, (
+                "Using sequence parallelism requires setting the environment variable "
+                "CUDA_DEVICE_MAX_CONNECTIONS to 1"
+            )
+            assert not self.async_tensor_model_parallel_allreduce, (
+                "Using async gradient all reduce requires setting the environment "
+                "variable CUDA_DEVICE_MAX_CONNECTIONS to 1"
+            )
+        assert isinstance(self.rope_theta, (float, list)), "rope_theta must be float!"
+        super().sanity_check()
+
+class DataConfig(Config):
+    global_data_keys: list[str] = None
+    """When set, broadcast data[key] to all ranks (not only head & tail).
+    The broadcast happens BEFORE preprocess.
+    """
+
+    def build_dataloader(self, dp_rank=0, dp_size=1) -> Iterable[dict]:
+        """Build a Nextable that returns a dict when call next(dataloader)."""
+        raise NotImplementedError
+
+    def preprocess(self, batch: dict) -> dict:
+        """Process the dict returned by next(dataloader)"""
+        from steptron.utils import recur_to
+
+        return recur_to(batch, "cuda")
+    
+
+class BaseExp(Config):
+    """Abstract of A Training:
+
+    - dataloader = exp.data.build_dataloader()
+    - model = exp.model.build_model()
+    - optimizer = exp.optimizer.build_optimizer(model)
+    - schduler = exp.scheduler.build_scheduler(optimizer)
+
+    - loop:
+        data: Any = next(dataloader)
+        inputs: dict = exp.data.preprocess(data)
+        outputs: Any = model(**inputs)
+        loss: Scalar = exp.trainer.loss_func(data, outputs)
+        loss.backward()
+    """
+
+    seed = 1234
+
+    log_dir = "./"
+    suffix: str = ""
+
+    project_name = None  # used for wandb parsing, 'entity/project_name:tag'
+
+    skip_compiling = True  # skip compiling kernels
+    build_path = None
+
+    # grad_check
+    is_grad_checking: bool = False
+
+    @cached_property
+    def file_path(self):
+        import inspect
+
+        return inspect.getabsfile(self.__class__)
+
+    @writable_property
+    def exp_name(self):
+        base_name = os.path.basename(self.file_path).split(".")[0]
+        return f"{base_name}/{self.suffix}".rstrip("/")
+
+    @property
+    def tensorboard_dir(self):
+        return os.path.join(
+            self.log_dir,
+            self.exp_name,
+        )
+
+    metric_cfg = MetricConfig
+
+    tokenizer_cfg = TokenizerConfig
+
+    optimizer_cfg = OptimizerConfig
+
+    scheduler_cfg = SchedulerConfig
+
+    trainer_cfg = TrainerConfig
+
+    model_cfg = ModelConfig
+
+    data_cfg = DataConfig
+
+    checkpoint_cfg = CheckpointConfig
+
+    def update_from_args(self):
+        from steptron.utils.arguments import parse_args
+        from steptron.utils.logger import setup_logger
+
+        # apply and log diffs from arguments
+        args = parse_args()
+        diff = self.merge(args, exists_only=True)
+        diff = "\n".join([f"{k}: {s} -> {t}" for k, s, t in diff])
+        try:
+            setup_logger(self.tensorboard_dir)
+        except:
+            pass
+        if diff:
+            logger.info(f"Modified by Args:\n{diff}", at=0)
+
+    def register_metrics(self, trainer):
+        """This is a hook that get the trainer as arg, register any metric here.
+
+        Args:
+            trainer (Any): trainer get by self.get_trainer()
+        """
+        self.metric_cfg.register()
+
+    def build_tensorboard_writer(self):
+        return self.build_log_writer()
+
+    def build_log_writer(self):
+        import inspect
+        import sys
+
+        from steptron.utils import StepWriter
+
+        writer = StepWriter(
+            log_dir=self.tensorboard_dir,
+            project_name=self.project_name,
+            exp_name=self.exp_name,
+            backend=self.trainer_cfg.writer_backend,
+            exp=self,
+        )
+        my_doc = inspect.getdoc(sys.modules[self.__class__.__module__])
+        writer.add_text("Note", my_doc or "No-Doc", global_step=0)
+        return writer
+
+    def train(self):
+        self.update_from_args()
+        self.sanity_check()
+
+        trainer = self.trainer_cfg.get_trainer_cls()(self)
+        trainer.train()
