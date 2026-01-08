@@ -107,7 +107,7 @@ class SimpleVocabParallelEmbedding(torch.nn.Module):
         )
 
         # Allocate weights and initialize.
-        self.weight = torch.nn.torch.nn.Parameter(
+        self.weight = torch.nn.Parameter(
             torch.empty(
                 self.num_embeddings_per_partition,
                 self.embedding_dim,
@@ -230,8 +230,6 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
             ctx.use_moe and ctx.is_column_parallel and ctx.moe_should_split_input
         )
         if not is_moe_gather_activation:
-            if ctx.cpu_offload:
-                ctx.default_stream.wait_stream(ctx.offload_stream)
             input, weight = ctx.saved_tensors
         use_bias = ctx.use_bias
         handle = None
@@ -398,7 +396,6 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(
         ctx.custom_pre_recompute_function = custom_pre_recompute_function
         assert custom_pre_recompute_function is not None
 
-        # Note: overwrite input may be dangerous here if cpu_offload is used.
         if custom_pre_recompute_function_input is not None:
             input = custom_pre_recompute_function(
                 input, custom_pre_recompute_function_input
@@ -434,13 +431,6 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(
     @staticmethod
     def backward(ctx, grad_output):
         input, weight, custom_pre_recompute_function_input = ctx.saved_tensors
-        is_moe_gather_activation = (
-            ctx.use_moe and ctx.is_column_parallel and ctx.moe_should_split_input
-        )
-        if not is_moe_gather_activation:
-            if ctx.cpu_offload:
-                ctx.default_stream.wait_stream(ctx.offload_stream)
-            input, weight = ctx.saved_tensors
         use_bias = ctx.use_bias
         handle = None
 
@@ -520,34 +510,9 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(
             total_input = all_gather_buffer
 
         else:
-            if is_moe_gather_activation:
-                # moe column parallel: try to overlap the re-gather activation
-                # with the matmul(grad_out, weight) operation
-                assert ctx.is_column_parallel
-                moe_saved_input, weight = ctx.saved_tensors
-                world_size = PM.size_of("TP")
-                rank = PM.rank_in("TP")
-                gathered_input_list = [
-                    torch.empty_like(moe_saved_input) for _ in range(world_size)
-                ]
-                gathered_input_list[rank] = moe_saved_input
-                gathered_input_handler = torch.distributed.all_gather(
-                    gathered_input_list,
-                    moe_saved_input,
-                    group=PM.group_of("TP"),
-                    async_op=True,
-                )
-            else:
-                # non moe, non sequence parallel
-                total_input = input
+            total_input = input
 
         grad_input = grad_output.matmul(weight)
-
-        if is_moe_gather_activation:
-            gathered_input_handler.wait()
-            total_input = torch.cat(gathered_input_list, dim=0)
-            if ctx.moe_input_pad_size > 0:
-                total_input = total_input[: -ctx.moe_input_pad_size].contiguous()
 
         if ctx.sequence_parallel:
             if handle is not None:
@@ -1027,9 +992,7 @@ class RowParallelLinear(torch.nn.Module):
             if use_moe:
                 setattr(self.weight, "expert_model_parallel", True)
 
-    def forward(
-        self, input_, custom_pre_recompute_function_input=None, cpu_offload_info={}
-    ):
+    def forward(self, input_, custom_pre_recompute_function_input=None):
         """Forward of RowParallelLinear
 
         Args:

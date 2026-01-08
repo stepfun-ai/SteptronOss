@@ -1,0 +1,88 @@
+from typing import Optional, Union
+
+import torch
+from torch.nn import functional as F
+from einops import rearrange
+
+from steptronoss.core import tensor_parallel
+from steptronoss.core.context_parallel import (
+    gather_from_balanced_cp_region,
+    cu_seqlens_to_balanced_cp,
+)
+from steptronoss.model.common.attention_core import FlashAttention
+from steptronoss.model.common.rmsnorm import RMSNorm
+from steptronoss.model.common.rope import YARNRoPE
+from steptronoss.utils import safediv
+from steptronoss.core.parallel_state import PM
+
+from steptronoss.exp.base_exp import MegatronTPModelConfig
+
+
+class FeedForwardConfig(MegatronTPModelConfig):
+
+    recompute_granularity: Optional[str]
+
+    hidden_size: int
+    ffn_hidden_size: int
+
+    layernorm_epsilon: float
+    rms_norm_zero_gamma: bool
+
+    swiglu_limit: float
+    swiglu_recompute_silu_out_proj: bool
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def build_model(self, layer_id: int):
+        return FeedForward(cfg=self, layer_id=layer_id)
+
+
+class FeedForward(torch.nn.Module):
+    def __init__(self, cfg: FeedForwardConfig, layer_id: int):
+        super().__init__()
+        self.layer_id = layer_id
+
+        self.cfg = cfg
+
+        self.swiglu_limit = cfg.swiglu_limit
+
+        def swiglu(x):
+            l, r = torch.chunk(x, 2, dim=-1)
+            l = F.silu(l)
+            if self.swiglu_limit != None:
+                l = l.clamp(min=None, max=self.swiglu_limit)
+                r = r.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
+            return l * r
+
+        self.swiglu = swiglu
+        self.swiglu_recompute_silu_out_proj = cfg.swiglu_recompute_silu_out_proj
+
+        self.w1 = tensor_parallel.ColumnParallelLinear(
+            cfg.hidden_size,
+            2 * cfg.ffn_hidden_size,
+            bias=False,
+            gather_output=False,
+            async_tensor_model_parallel_allreduce=cfg.async_tensor_model_parallel_allreduce,
+            **self.cfg.get_tp_kwargs(),
+        )
+        self.w2 = tensor_parallel.RowParallelLinear(
+            cfg.ffn_hidden_size,
+            cfg.hidden_size,
+            bias=False,
+            input_is_parallel=True,
+            custom_pre_recompute_function=(
+                self.swiglu if self.swiglu_recompute_silu_out_proj else None
+            ),
+            **self.cfg.get_tp_kwargs(),
+        )
+        self.swiglu_recompute_silu_out_proj = cfg.swiglu_recompute_silu_out_proj
+
+    def forward(self, x, **kwargs):
+        if self.swiglu_recompute_silu_out_proj:
+            x = self.w1(x)[0]
+            output = self.w2(x)[0]
+        else:
+            x = self.swiglu(self.w1(x)[0])
+            output = self.w2(x)[0]
+        return output

@@ -9,9 +9,8 @@ import os
 import subprocess
 
 import torch
-from loguru import logger
-
 from configurize import DataClass
+from loguru import logger
 
 
 def safediv(n, d):
@@ -36,6 +35,17 @@ def shift_right(tensor: torch.Tensor, pad=0, shift=1) -> torch.Tensor:
     out = torch.full_like(tensor, pad)
     out[shift:] = tensor[:-shift]
     return out.contiguous()
+
+
+def get_position_id_from_cu_seqlens(cu_seqlens: torch.IntTensor) -> torch.IntTensor:
+    """Generate position ids from cumulative seq lens.
+    - cu_seqlens: [N, ] e.g. [0, 3, 5]
+    - return: [S, ] e.g. [0, 1, 2, 0, 1]
+    """
+    position_id = torch.arange(
+        cu_seqlens[-1], device=cu_seqlens.device, dtype=cu_seqlens.dtype
+    ) - torch.repeat_interleave(cu_seqlens[:-1], cu_seqlens.diff())
+    return position_id
 
 
 def convert_num(num: int | float, nfp=3, G=False) -> str:
@@ -76,8 +86,10 @@ def lens_to_cum_len(
     if isinstance(size_list, list):
         size_list = torch.tensor([0] + size_list, dtype=dtype, device=device)
     else:
-        size_list = torch.cat([size_list.new_zeros(1), size_list], 0)
-    cum_sizes = torch.cumsum(size_list, dim=0)
+        size_list = torch.cat(
+            [size_list.new_zeros(1, dtype=dtype, device=device), size_list], 0
+        )
+    cum_sizes = torch.cumsum(size_list, dim=0, dtype=dtype)
     return cum_sizes
 
 
@@ -247,7 +259,6 @@ def hack_pickle_load():
     pickle._Unpickler.find_class = find_class
 
 
-
 def deprecated(message: str = "This function is deprecated."):
     """
     Decorator to mark a function or method as deprecated.
@@ -267,6 +278,7 @@ def deprecated(message: str = "This function is deprecated."):
         return wrapper
 
     return decorator
+
 
 def run_async(coro):
     """Just like asyncio.run, get rid of 'Event Loop Closed'"""
@@ -380,7 +392,6 @@ def retry_on(
 
 def get_git_revision_hash() -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("ascii").strip()
-
 
 
 @functools.cache

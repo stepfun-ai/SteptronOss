@@ -1,26 +1,31 @@
 import copy
-from functools import cached_property
 import os
-import torch
-import torch.distributed
-from torch import Tensor
-from loguru import logger
-
-from typing import Any, Callable, ForwardRef, Iterable, Iterator, Literal, NoReturn, Optional
-
-from torch.nn import Module, Parameter
-
-from configurize import Config, Ref, writable_property
-from steptronoss.exp.abstract import (
-    OptimizerConfig as AbstractOptimizerConfig,
-    SchedulerConfig as AbstractSchedulerConfig,
-    MetricConfig as AbstractMetricConfig,
-    TrainerConfig as AbstractTrainerConfig,
-    TokenizerConfig as AbstractTokenizerConfig,
-    ParallelConfig as AbstractParallelConfig,
-    ModelConfig as AbstractModelConfig,
+from functools import cached_property
+from typing import (
+    Any,
+    Callable,
+    ForwardRef,
+    Iterable,
+    Iterator,
+    Literal,
+    NoReturn,
+    Optional,
 )
 
+import torch
+import torch.distributed
+from configurize import Config, Ref, writable_property
+from loguru import logger
+from torch import Tensor
+from torch.nn import Module, Parameter
+
+from steptronoss.exp.abstract import MetricConfig as AbstractMetricConfig
+from steptronoss.exp.abstract import ModelConfig as AbstractModelConfig
+from steptronoss.exp.abstract import OptimizerConfig as AbstractOptimizerConfig
+from steptronoss.exp.abstract import ParallelConfig as AbstractParallelConfig
+from steptronoss.exp.abstract import SchedulerConfig as AbstractSchedulerConfig
+from steptronoss.exp.abstract import TokenizerConfig as AbstractTokenizerConfig
+from steptronoss.exp.abstract import TrainerConfig as AbstractTrainerConfig
 
 TrainerHook = Callable[[ForwardRef("Trainer")], NoReturn]
 
@@ -360,7 +365,7 @@ class TrainerConfig(AbstractTrainerConfig):
         return {}
 
     def is_data_source(self) -> bool:
-        from steptron.core.parallel_state import PM
+        from steptronoss.core.parallel_state import PM
 
         # build dataloaders only on data-source nodes
         # (PP0||PPLast) && TP0 && CP0
@@ -374,13 +379,14 @@ class TrainerConfig(AbstractTrainerConfig):
 
     def sync_get_data(self, data_iterator: Iterator[Any]) -> dict[str, Any]:
         # This function Get/Broadcast/Preprocess and return data ready-to-use
-        from steptron.core.parallel_state import PM
-        from steptron.core.parallel_state import (
+        from steptron.timers import get_timers
+
+        from steptronoss.core.parallel_state import (
+            PM,
             get_virtual_pipeline_model_parallel_rank,
             get_virtual_pipeline_model_parallel_world_size,
         )
-        from steptron.timers import get_timers
-        from steptron.utils import broadcast_tensors
+        from steptronoss.utils import broadcast_tensors
 
         class NonOfHeadOrTail(dict):
             pass
@@ -474,8 +480,8 @@ class TrainerConfig(AbstractTrainerConfig):
         """
 
         def check_uninitialized_model_weight(trainer):
-            from steptron.core.parallel_state import PM
-            from steptron.utils.utils import unwrap_model
+            from steptronoss.core.parallel_state import PM
+            from steptronoss.utils.utils import unwrap_model
 
             if hasattr(trainer, "models") and PM.i_am("DP", 0) and PM.i_am("TP", 0):
                 uninitialized_keys = []
@@ -531,7 +537,7 @@ class TokenizerConfig(AbstractTokenizerConfig):
 
     @writable_property
     def padded_vocab_size(self) -> int:
-        from steptron.utils import make_divisible
+        from steptronoss.utils.general import make_divisible
 
         return make_divisible(
             self.vocab_size,
@@ -691,7 +697,7 @@ class MoEConfig(Config):
 
     def get_aux_loss_calib_scale(self) -> float:
         """aux loss is local, and cannot percept grad_acc_steps, let's scale the coef instead."""
-        from steptron.core.parallel_state import PM
+        from steptronoss.core.parallel_state import PM
 
         if self.moe_aux_loss_coef != 0 and PM.size_of("CP") > 1:
             assert self.use_ep_group_wise_aux_loss, (
@@ -753,7 +759,7 @@ class ParallelConfig(AbstractParallelConfig):
     virtual_pipeline_model_parallel_size: int = 1
 
     def build_parallel(self) -> dict[str, list[list[int]]]:
-        from steptron.core.parallel_state import PM
+        from steptronoss.core.parallel_state import PM
 
         args = {
             "p": self.pipeline_model_parallel_size,
@@ -772,24 +778,16 @@ class ParallelConfig(AbstractParallelConfig):
 
 
 class MegatronTPModelConfig(AbstractModelConfig):
-    parallel_cfg: type[ParallelConfig] = ParallelConfig
-
     params_dtype: torch.dtype = torch.bfloat16
 
     sequence_parallel: bool = False
 
-    tensor_model_parallel_size: int = Ref(".parallel_cfg.tensor_parallel_size")
-
-    use_cpu_initialization: bool = False
-    perform_initialization: bool = True
     gradient_accumulation_fusion: bool = True
     async_tensor_model_parallel_allreduce: bool = True
 
     def get_tp_kwargs(self) -> dict[str, Any]:
         return {
             "params_dtype": self.params_dtype,
-            "use_cpu_initialization": self.use_cpu_initialization,
-            "perform_initialization": self.perform_initialization,
             "gradient_accumulation_fusion": self.gradient_accumulation_fusion,
             "sequence_parallel_enabled": self.sequence_parallel,
         }
@@ -839,6 +837,7 @@ class Megatron3DParallelModelConfig(
             * self.parallel_cfg.pipeline_model_parallel_size
             * self.parallel_cfg.context_parallel_size
         )
+
 
 class RoPEConfig(Config):
 
@@ -932,17 +931,8 @@ class ModelConfig(Megatron3DParallelModelConfig):
     use_qkv_bias: bool = False
 
     # WARNING: FOR EXPERT ONLY
-    use_optimus_fuse_silu_dot: bool = True
-    use_optimus_rms_norm: bool = True
-    use_optimus_embedding: bool = True
-    use_kernel_rms_norm: bool = True
-
-    use_optimus_attn_sigmoid_gate: bool = False
 
     swiglu_recompute_silu_out_proj: bool = True
-
-    log_attn_maximum_logits: bool = False
-    log_attn_gate: bool = False
 
     # for clip sliu
 
@@ -966,11 +956,15 @@ class ModelConfig(Megatron3DParallelModelConfig):
             assert len(self.layer_types) == self.num_layers
         if self.moe_cfg.use_moe:
             assert (
-                self.moe_cfg.moe_num_experts % self.parallel_cfg.expert_model_parallel_size
+                self.moe_cfg.moe_num_experts
+                % self.parallel_cfg.expert_model_parallel_size
                 == 0
             )
             assert self.moe_cfg.moe_top_k <= self.moe_cfg.moe_num_experts
-            if self.parallel_cfg.expert_model_parallel_size > 1 and self.moe_cfg.moe_enable_group_gemm:
+            if (
+                self.parallel_cfg.expert_model_parallel_size > 1
+                and self.moe_cfg.moe_enable_group_gemm
+            ):
                 assert self.moe_cfg.moe_enable_deepep, (
                     "When expert_model_parallel_size > 1, grouped gemm(moe_enable_group_gemm=True) "
                     "requires DeepEP, set moe_enable_deepep to True"
@@ -1022,9 +1016,7 @@ class ModelConfig(Megatron3DParallelModelConfig):
         if self.overlap_p2p_comm and not self.sequence_parallel:
             self.scatter_gather_tensors_in_pipeline = False
 
-        if (
-            os.getenv("CUDA_DEVICE_MAX_CONNECTIONS", None) != "1"
-        ):
+        if os.getenv("CUDA_DEVICE_MAX_CONNECTIONS", None) != "1":
             assert not self.sequence_parallel, (
                 "Using sequence parallelism requires setting the environment variable "
                 "CUDA_DEVICE_MAX_CONNECTIONS to 1"
@@ -1035,6 +1027,7 @@ class ModelConfig(Megatron3DParallelModelConfig):
             )
         assert isinstance(self.rope_theta, (float, list)), "rope_theta must be float!"
         super().sanity_check()
+
 
 class DataConfig(Config):
     global_data_keys: list[str] = None
@@ -1048,10 +1041,10 @@ class DataConfig(Config):
 
     def preprocess(self, batch: dict) -> dict:
         """Process the dict returned by next(dataloader)"""
-        from steptron.utils import recur_to
+        from steptronoss.utils.general import recur_to
 
         return recur_to(batch, "cuda")
-    
+
 
 class BaseExp(Config):
     """Abstract of A Training:
@@ -1094,27 +1087,27 @@ class BaseExp(Config):
         return f"{base_name}/{self.suffix}".rstrip("/")
 
     @property
-    def tensorboard_dir(self):
+    def log_path(self):
         return os.path.join(
             self.log_dir,
             self.exp_name,
         )
 
-    metric_cfg = MetricConfig
+    # metric_cfg = MetricConfig
 
-    tokenizer_cfg = TokenizerConfig
+    # tokenizer_cfg = TokenizerConfig
 
-    optimizer_cfg = OptimizerConfig
+    # optimizer_cfg = OptimizerConfig
 
-    scheduler_cfg = SchedulerConfig
+    # scheduler_cfg = SchedulerConfig
 
-    trainer_cfg = TrainerConfig
+    # trainer_cfg = TrainerConfig
 
-    model_cfg = ModelConfig
+    # model_cfg = ModelConfig
 
-    data_cfg = DataConfig
+    # data_cfg = DataConfig
 
-    checkpoint_cfg = CheckpointConfig
+    # checkpoint_cfg = CheckpointConfig
 
     def update_from_args(self):
         from steptron.utils.arguments import parse_args
@@ -1125,7 +1118,7 @@ class BaseExp(Config):
         diff = self.merge(args, exists_only=True)
         diff = "\n".join([f"{k}: {s} -> {t}" for k, s, t in diff])
         try:
-            setup_logger(self.tensorboard_dir)
+            setup_logger(self.log_path)
         except:
             pass
         if diff:
@@ -1139,9 +1132,6 @@ class BaseExp(Config):
         """
         self.metric_cfg.register()
 
-    def build_tensorboard_writer(self):
-        return self.build_log_writer()
-
     def build_log_writer(self):
         import inspect
         import sys
@@ -1149,19 +1139,12 @@ class BaseExp(Config):
         from steptron.utils import StepWriter
 
         writer = StepWriter(
-            log_dir=self.tensorboard_dir,
+            log_dir=self.log_path,
             project_name=self.project_name,
             exp_name=self.exp_name,
-            backend=self.trainer_cfg.writer_backend,
+            backend=["tensorboard"],
             exp=self,
         )
         my_doc = inspect.getdoc(sys.modules[self.__class__.__module__])
         writer.add_text("Note", my_doc or "No-Doc", global_step=0)
         return writer
-
-    def train(self):
-        self.update_from_args()
-        self.sanity_check()
-
-        trainer = self.trainer_cfg.get_trainer_cls()(self)
-        trainer.train()

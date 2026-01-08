@@ -4,9 +4,8 @@ import os
 from functools import cached_property
 from typing import TYPE_CHECKING, Iterable, NoReturn, TypedDict
 
-from torch.nn import Module
-
 from configurize import Config, writable_property
+from torch.nn import Module
 
 if TYPE_CHECKING:
     from transformers import AutoTokenizer
@@ -176,7 +175,6 @@ class BaseExp(Config):
 
     def update_from_args(self):
         from loguru import logger
-
         from steptron.utils.arguments import parse_args
         from steptron.utils.logger import setup_logger
 

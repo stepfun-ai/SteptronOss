@@ -9,9 +9,9 @@ T = TypeVar("T")
 import numpy as np
 import torch
 import torch.distributed
+from configurize import DataClass
 
 from steptronoss.core.parallel_state import PM
-from configurize import DataClass
 
 from .general import list_split, list_split_T, recur_to
 

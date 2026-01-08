@@ -21,6 +21,7 @@ _FLOAT_TYPES = (torch.FloatTensor, torch.cuda.FloatTensor)
 _HALF_TYPES = (torch.HalfTensor, torch.cuda.HalfTensor)
 _BF16_TYPES = (torch.BFloat16Tensor, torch.cuda.BFloat16Tensor)
 
+
 class MegatronModule(torch.nn.Module):
     pp_rank: int = 0
     pp_size: int = 1

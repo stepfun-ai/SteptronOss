@@ -14,12 +14,8 @@ from tabulate import tabulate
 from torch.nn.parallel import DistributedDataParallel as torchDDP
 
 from steptronoss.core.parallel_state import PM, get_virtual_pipeline_model_parallel_rank
-from steptronoss.core.tensor_parallel import (
-    param_is_not_expert_parallel_duplicate,
-    param_is_not_tensor_parallel_duplicate,
-)
 from steptronoss.model.distributed import DistributedDataParallel as localDDP
-from steptronoss.model.module import Float16Module, MegatronModule, param_is_not_shared
+from steptronoss.model.module import Float16Module, MegatronModule
 
 from .general import convert_num
 
@@ -41,10 +37,16 @@ def unwrap_model(
     return unwrapped_model
 
 
-
 def calc_params_l2_norm(model, is_bf16=False):
     """Calculate l2 norm of parameters"""
+    from steptronoss.core.tensor_parallel import (
+        param_is_not_expert_parallel_duplicate,
+        param_is_not_tensor_parallel_duplicate,
+    )
     from steptronoss.core.utils import multi_tensor_applier, multi_tensor_l2_norm
+
+    def param_is_not_shared(param):
+        return not hasattr(param, "shared") or not param.shared
 
     if not isinstance(model, list):
         model = [model]
@@ -77,7 +79,6 @@ def calc_params_l2_norm(model, is_bf16=False):
         norm_2, op=torch.distributed.ReduceOp.SUM, group=PM.group_of("MP")
     )
     return norm_2.item() ** 0.5
-
 
 
 def get_mem_brief(name="", unit="G"):
@@ -115,7 +116,6 @@ def force_clear_mem():
     torch.cuda.synchronize()
     torch.cuda.empty_cache()
     logger.info(get_mem_brief("After Force Clear: "))
-
 
 
 def print_n_params(model: list[torch.nn.Module]):
@@ -177,9 +177,7 @@ def print_n_params(model: list[torch.nn.Module]):
 
     if PM.rank_in("DP") == 0 and PM.rank_in("TP") == 0:
         all_tp_params = [convert_num(all_tp_params[i]) for i in range(tp_size)]
-        all_node_params = [
-            None for i in range(PM.size_of("PP"))
-        ]
+        all_node_params = [None for i in range(PM.size_of("PP"))]
         torch.distributed.all_gather_object(
             all_node_params,
             all_tp_params,
@@ -209,9 +207,7 @@ def print_n_params(model: list[torch.nn.Module]):
         ],
         device="cuda",
     )
-    torch.distributed.all_reduce(
-        total_nums, group=PM.group_of("PP")
-    )
+    torch.distributed.all_reduce(total_nums, group=PM.group_of("PP"))
 
     if torch.distributed.get_rank() == 0:
         logger.info(f"total params: {convert_num(total_nums[0].item())}")
@@ -406,18 +402,19 @@ def check_nan(tensors, input_tensor):
 
         if input_is_nan == 0:
             logger.warning(
-                f"NaN detected [{N_nan}/{N_total}] on TP={PM.rank_in("TP")}/"
-                f"PP={PM.rank_in("PP")}/"
+                f"NaN detected [{N_nan}/{N_total}] on TP={PM.rank_in('TP')}/"
+                f"PP={PM.rank_in('PP')}/"
                 f"VP={get_virtual_pipeline_model_parallel_rank()}"
             )
 
+
 def get_exp_id() -> Optional[str]:
-    """Get EXP_ID for this worker.
-    """
+    """Get EXP_ID for this worker."""
     exp_id = os.environ.get("EXP_ID", None)
     if exp_id is not None:
         exp_id = exp_id.split("/")[0]
     return exp_id
+
 
 def get_normalizer(x: torch.Tensor):
     n = torch.as_tensor(x.numel(), device=x.device)
@@ -537,6 +534,7 @@ def load(path: str, mode=None, **kwargs):
     else:
         data = megfile.smart_open(path, "rb")
     return data
+
 
 def moving_iter(data: list, active="cuda", default="cpu"):
     """Same like iter(), but move object to active device when yield, and

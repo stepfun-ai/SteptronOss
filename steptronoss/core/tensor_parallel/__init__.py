@@ -21,7 +21,6 @@ from .random import (
     CheckpointWithoutOutput,
     checkpoint,
     get_cuda_rng_tracker,
-    model_parallel_cuda_manual_seed,
 )
 from .utils import (
     gather_split_1d_tensor,

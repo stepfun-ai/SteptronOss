@@ -135,56 +135,6 @@ def get_cuda_rng_tracker():
     return _CUDA_RNG_STATE_TRACKER
 
 
-def model_parallel_cuda_manual_seed(seed):
-    """Initialize model parallel cuda seed.
-
-    This function should be called after the model parallel is
-    initialized. Also, no torch.cuda.manual_seed should be called
-    after this function. Basically, this is replacement for that
-    function.
-
-    Three sets of RNG states are tracked:
-        default state: This is for data parallelism and is the same among a
-                       set of model parallel GPUs but different across
-                       different model parallel groups. This is used for
-                       example for dropout in the non-tensor-model-parallel regions.
-        tensor-model-parallel state: This state is different among a set of model
-                              parallel GPUs, but the same across data parallel
-                              groups. This is used for example for dropout in
-                              model parallel regions.
-        expert-model-parallel state: This state is different among expert parallel
-                              groups, using rank-specific offsets for (ep, etp) pairs.
-
-    Args:
-        seed: Base random seed for all layers
-    """
-    # 2718 is just for fun and any POSITIVE value will work.
-    offset = seed + 2718
-    tensor_model_parallel_seed = offset + PM.rank_in("TP")
-
-    # For expert layers, create a unique seed for each (ep, etp) pair.
-    # Use a different offset than attention tp.
-    expert_offset = seed + 3718
-    expert_tensor_model_parallel_seed = (
-        expert_offset
-        + PM.rank_in("ETP")
-        + PM.rank_in("EP") * PM.size_of("ETP")
-    )
-    # Data parallel gets the original seed.
-    data_parallel_seed = seed
-
-    _CUDA_RNG_STATE_TRACKER.reset()
-    # Set the default state.
-    torch.cuda.manual_seed(data_parallel_seed)
-    # and model parallel state.
-    _CUDA_RNG_STATE_TRACKER.add(
-        _MODEL_PARALLEL_RNG_TRACKER_NAME, tensor_model_parallel_seed
-    )
-    _CUDA_RNG_STATE_TRACKER.add(
-        _EXPERT_MODEL_PARALLEL_RNG_TRACKER_NAME, expert_tensor_model_parallel_seed
-    )
-
-
 class CheckpointFunction(torch.autograd.Function):
     """This function is adapted from torch.utils.checkpoint with
     two main changes:
