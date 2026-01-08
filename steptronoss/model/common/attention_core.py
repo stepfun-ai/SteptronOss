@@ -5,6 +5,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+
 @torch.no_grad()
 def parse_cu_seqlens(cu_seqlens, max_seq_len=None):
     if isinstance(max_seq_len, dict):
@@ -28,6 +29,7 @@ def parse_cu_seqlens(cu_seqlens, max_seq_len=None):
         if max_q_len is None or max_k_len is None:
             max_q_len = max_k_len = torch.max(cu_seqlens[1:] - cu_seqlens[:-1])
     return cu_seqlens_q, cu_seqlens_k, max_q_len, max_k_len
+
 
 class FlashAttention(nn.Module):
     """Flash Attention implementation wrapper.
@@ -69,7 +71,7 @@ class FlashAttention(nn.Module):
             Attention output of shape [batch, seq, heads, head_dim]
         """
         try:
-            from flash_attn import flash_attn_varlen_func, flash_attn_func
+            from flash_attn import flash_attn_func, flash_attn_varlen_func
         except ImportError:
             # Fallback to standard attention if flash_attn is not available
             return self._standard_attention(q, k, v)

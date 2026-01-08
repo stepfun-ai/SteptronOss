@@ -217,7 +217,7 @@ class YARNRoPE(torch.nn.Module):
         # feature: [B, S, H, C]
         # position_id: [S, ]
 
-        if position_id is not None: # packed sample
+        if position_id is not None:  # packed sample
             max_seqlen = feature.shape[1]
             cos_cache, sin_cache = self._check_set_cos_sin_cache(
                 max_seqlen, position_id.device
@@ -232,7 +232,7 @@ class YARNRoPE(torch.nn.Module):
                 .to(feature.device)
                 .to(feature.dtype)
             )
-        else: # no packing
+        else:  # no packing
             max_seqlen = feature.shape[1]
             cos_cache, sin_cache = self._check_set_cos_sin_cache(
                 max_seqlen, feature.device
