@@ -7,10 +7,13 @@ import functools
 import multiprocessing as mp
 import os
 import subprocess
+from typing import TypeVar
 
 import torch
 from configurize import DataClass
 from loguru import logger
+
+T = TypeVar("Any")
 
 
 def safediv(n, d):
@@ -93,7 +96,7 @@ def lens_to_cum_len(
     return cum_sizes
 
 
-def list_split(data: list, split: int) -> list[list]:
+def list_split(data: list[T], split: int) -> list[list[T]]:
     """
     split `data` into `split` sub lists in row-major order
     E.g. list_split(torch.arange(13).tolist(), 3) ->
@@ -117,7 +120,7 @@ def list_split(data: list, split: int) -> list[list]:
     return output
 
 
-def list_split_T(data: list, split: int) -> list[list]:
+def list_split_T(data: list[T], split: int) -> list[list[T]]:
     """
     Column-major version of list_split.
     E.g. list_split_T(torch.arange(13).tolist(), 3) ->
@@ -130,23 +133,83 @@ def list_split_T(data: list, split: int) -> list[list]:
     return [data[i::split] for i in range(split)]
 
 
-def balanced_list_split(data: list, sizes: list[int], split: int) -> list[list]:
+def balanced_list_split(
+    data: list[T], sizes: list[int], split: int, number_balance=False
+) -> list[list[T]]:
+    """Greedy, order-agnostic split of `data` into `split` buckets.
+
+    Items are processed from largest to smallest `size` and placed in the bucket
+    whose score is minimal at that step.
+
+    Args:
+        data: Items to distribute. Must have the same length as ``sizes``.
+        sizes: Per-item weights used for balancing.
+        split: Number of buckets to create.
+        number_balance: When ``True``, also penalizes buckets with more items to
+            keep counts roughly even; when ``False`` balances only total weight.
+
+    Returns:
+        A list of ``split`` buckets containing the selected items; input order is
+        not preserved.
+    """
     import numpy as np
 
-    new_data: list[list] = [[] for i in range(split)]
+    new_data: list[list[T]] = [[] for i in range(split)]
     new_size = np.zeros(split, dtype=int)
     new_cout = np.zeros(split, dtype=int)
-    total_sizes = sum(sizes)
-    for idx, i in enumerate(np.argsort(sizes)[::-1]):
-        idx = idx // split
-        dst = (new_cout * total_sizes + new_size).argmin()
+    total_sizes = sum(sizes) if number_balance else 0
+    for i in np.argsort(sizes)[::-1]:
+        dst = (total_sizes * new_cout + new_size).argmin()
         new_data[dst].append(data[i])
         new_size[dst] += sizes[i]
         new_cout[dst] += 1
     return new_data
 
 
-def list_chunk(data: list, chunk_size: int) -> list[list]:
+def balanced_list_split_keep_order(
+    data: list[T], sizes: list[int], k: int
+) -> list[list[T]]:
+    """Split data: list[Any] with size: list[int], minimize max(chunked_size)."""
+    assert len(data) == len(sizes)
+    n = len(sizes)
+    assert k and n, "Both sizes and k cannot be empty!"
+    if k >= n:  # more buckets than items → some empties
+        return [[x] for x in sizes] + [[] for _ in range(k - n)]
+
+    low, high = max(sizes), sum(sizes)  # 1 elms at least, all elms at most
+
+    def need_buckets(cumsum_limit):
+        buckets, cur = 1, 0
+        for x in sizes:
+            if cur + x > cumsum_limit:
+                buckets += 1
+                cur = 0
+            cur += x
+        return buckets
+
+    while low < high:
+        mid = (low + high) // 2
+        if need_buckets(mid) <= k:
+            high = mid
+        else:
+            low = mid + 1
+    max_allowed = low
+
+    # Reconstruct chunks: keep as many items as possible in each bucket
+    res, cur, cur_size, remaining = [], [], [], k - 1
+    for i, x in enumerate(sizes):
+        items_left = n - i
+        if cur and (sum(cur_size) + x > max_allowed or items_left == remaining):
+            res.append(cur)
+            cur, cur_size = [], []
+            remaining -= 1
+        cur.append(data[i])
+        cur_size.append(x)
+    res.append(cur)
+    return res
+
+
+def list_chunk(data: list[T], chunk_size: int) -> list[list[T]]:
     return [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
 
 

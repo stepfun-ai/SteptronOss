@@ -1,8 +1,13 @@
 import os
-from typing import Optional, Callable
 import warnings
+from typing import Callable, Optional
+
 import torch
 from torch.nn import functional as F
+
+from steptronoss.core.parallel_state import PM, get_global_memory_buffer
+from steptronoss.utils.general import safediv
+
 from .mappings import (
     copy_to_tensor_model_parallel_region,
     gather_from_tensor_model_parallel_region,
@@ -12,8 +17,6 @@ from .mappings import (
     split_along_first_dim_with_padding,
 )
 from .random import _set_cuda_rng_state, detach_variable, get_cuda_rng_tracker
-from steptronoss.core.parallel_state import PM, get_global_memory_buffer
-from steptronoss.utils.general import safediv
 
 _grad_accum_fusion_available = True
 try:
@@ -71,6 +74,9 @@ def copy_tensor_model_parallel_attributes(destination_tensor, source_tensor):
 
     for attribute in _MODEL_PARALLEL_ATTRIBUTE_DEFAULTS:
         maybe_copy(attribute)
+    # Also propagate shared flag when present (e.g., tied embeddings).
+    if hasattr(source_tensor, "shared"):
+        destination_tensor.shared = source_tensor.shared
 
 
 class SimpleVocabParallelEmbedding(torch.nn.Module):

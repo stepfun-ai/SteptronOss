@@ -2,7 +2,7 @@ import torch
 
 from steptronoss.core import tensor_parallel
 from steptronoss.exp.base_exp import MegatronTPModelConfig
-from SteptronOss.steptronoss.model.common.rms_norm import RMSNorm
+from steptronoss.model.common.rms_norm import RMSNorm
 
 
 class InputEmbeddingConfig(MegatronTPModelConfig):

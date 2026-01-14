@@ -22,6 +22,10 @@ _HALF_TYPES = (torch.HalfTensor, torch.cuda.HalfTensor)
 _BF16_TYPES = (torch.BFloat16Tensor, torch.cuda.BFloat16Tensor)
 
 
+def param_is_not_shared(param):
+    return not hasattr(param, "shared") or not param.shared
+
+
 class MegatronModule(torch.nn.Module):
     pp_rank: int = 0
     pp_size: int = 1
@@ -172,6 +176,24 @@ class MegatronModule(torch.nn.Module):
         return self.reshaper.backward(state_dict)
 
 
+class ModelWrapperBase(torch.nn.Module):
+    """Abstract class for DDP."""
+
+    def __init__(self, module: torch.nn.Module):
+        super().__init__()
+        # Keep a pointer to the model.
+        self.module = module
+
+    def forward(self, *inputs, **kwargs):
+        return self.module(*inputs, **kwargs)
+
+    def state_dict(self, prefix="", keep_vars=False):
+        return self.module.state_dict(prefix=prefix, keep_vars=keep_vars)
+
+    def load_state_dict(self, state_dict, strict=True):
+        return self.module.load_state_dict(state_dict, strict=strict)
+
+
 def conversion_helper(val, conversion):
     """Apply conversion to val. Recursively apply conversion if `val`
     #is a nested tuple/list structure."""
@@ -183,7 +205,7 @@ def conversion_helper(val, conversion):
     return rtn
 
 
-def fp32_to_float16(val, float16_convertor):
+def fp32_to_float16(val, dtype=torch.bfloat16):
     """Convert fp32 `val` to fp16/bf16"""
 
     def half_conversion(val):
@@ -191,7 +213,7 @@ def fp32_to_float16(val, float16_convertor):
         if isinstance(val_typecheck, (Parameter, Variable)):
             val_typecheck = val.data
         if isinstance(val_typecheck, _FLOAT_TYPES):
-            val = float16_convertor(val)
+            val = val.to(dtype)
         return val
 
     return conversion_helper(val, half_conversion)
@@ -211,39 +233,20 @@ def float16_to_fp32(val):
     return conversion_helper(val, float_conversion)
 
 
-class Float16Module(MegatronModule):
+class Float16Module(ModelWrapperBase):
 
     def __init__(self, module: MegatronModule, dtype: torch.dtype, fp32_output=True):
-        super().__init__()
-
-        if isinstance(module, MegatronModule):
-            self.pp_rank = module.pp_rank
-            self.pp_size = module.pp_size
-
-        if not isinstance(dtype, torch.dtype):
-            if getattr(dtype, "bf16", False):
-                dtype = torch.bfloat16
-            elif getattr(dtype, "fp16", False):
-                dtype = torch.float16
-
-        def float16_convertor(val: torch.Tensor):
-            return val.to(dtype)
+        super().__init__(module)
 
         self.module = module.to(dtype)
 
-        self.float16_convertor = float16_convertor
+        self.dtype = dtype
         self.fp32_output = fp32_output
 
     def forward(self, *inputs, **kwargs):
-        if self.is_pipeline_first_stage():
-            inputs = fp32_to_float16(inputs, self.float16_convertor)
+        if self.module.is_pipeline_first_stage():
+            inputs = fp32_to_float16(inputs, self.dtype)
         outputs = self.module(*inputs, **kwargs)
-        if self.is_pipeline_last_stage() and self.fp32_output:
+        if self.module.is_pipeline_last_stage() and self.fp32_output:
             outputs = float16_to_fp32(outputs)
         return outputs
-
-    def state_dict(self, *args, **kwargs):
-        return self.module.state_dict(*args, **kwargs)
-
-    def load_state_dict(self, *args, **kwargs):
-        return self.module.load_state_dict(*args, **kwargs)

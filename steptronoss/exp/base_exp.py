@@ -35,28 +35,13 @@ def is_log_rank() -> bool:
 
 
 class OptimizerConfig(AbstractOptimizerConfig):
-    optimizer: Literal["adam", "muon"] = "adam"
 
     weight_decay: float = 0.01
     weight_decay_on_1d_params: bool = False
 
-    use_distributed_optimizer: bool = True
-
-    clip_grad: float = 1.0
-
-    params_dtype: torch.dtype = Ref("..model_cfg.params_dtype")
-
     lr: float = Ref("..scheduler_cfg.lr")
 
     weight_decay: float = Ref("..scheduler_cfg.weight_decay")
-
-    use_contiguous_buffers_in_local_ddp: bool = Ref(
-        "..model_cfg.use_contiguous_buffers_in_local_ddp"
-    )
-
-    log_detailed_grad_norms: bool = Ref("..trainer_cfg.log_detailed_grad_norms")
-
-    log_num_zeros_in_grad: bool = Ref("..trainer_cfg.log_num_zeros_in_grad")
 
     # adam-specific hyperparams
     adam_eps: float = 1e-8
@@ -64,17 +49,17 @@ class OptimizerConfig(AbstractOptimizerConfig):
     adam_beta2: float = 0.95
 
     # muon-specific hyperparams
-    muon_matched_adamw_rms: float = 0.2
-    muon_momentum: float = 0.95
-    muon_nesterov: bool = True
-    muon_ns_steps: int = 5
-    muon_newtonschulz_fn: str = "polar_express"
-    muon_run_ns_in_fp32: bool = False
-    muon_run_ns_in_fp16: bool = True
-    muon_log_updates_grad_norms: bool = False
-    muon_batch_compute_mem_size: int = 128 * 1024 * 1024
-    muon_auto_applier_attn_pack_param_strategy: str = "split_by_type"
-    muon_auto_applier_glu_pack_param_strategy: str = "split_by_type"
+    # muon_matched_adamw_rms: float = 0.2
+    # muon_momentum: float = 0.95
+    # muon_nesterov: bool = True
+    # muon_ns_steps: int = 5
+    # muon_newtonschulz_fn: str = "polar_express"
+    # muon_run_ns_in_fp32: bool = False
+    # muon_run_ns_in_fp16: bool = True
+    # muon_log_updates_grad_norms: bool = False
+    # muon_batch_compute_mem_size: int = 128 * 1024 * 1024
+    # muon_auto_applier_attn_pack_param_strategy: str = "split_by_type"
+    # muon_auto_applier_glu_pack_param_strategy: str = "split_by_type"
 
     def scale_lr_func(self, name: str, param: Parameter) -> float:
         if hasattr(param, "_lr_scale"):
@@ -88,36 +73,17 @@ class OptimizerConfig(AbstractOptimizerConfig):
             return 0.0
         return 1.0
 
-    def build_loss_scaler(self) -> Any:
-        from steptron.optimizer import ConstantGradScaler
-
-        grad_scaler = ConstantGradScaler(1.0)
-        return grad_scaler
-
-    def build_optimizer(self, model: Module) -> Any:
+    def build_optimizer(self, model: Module) -> torch.optim.Optimizer:
         # Base optimizer.
+        from torch.optim.adam import Adam
 
-        from steptron.optimizer import Adam, advanced_get_param_groups
-        from steptron.optimizer.distrib_optimizer import DummyOptimizer
-        from steptron.optimizer.local_dp_optimizer import LocalDPOptimizer
-        from steptron.optimizer.muon import Muon
-        from steptron.optimizer.optimizer import Float16OptimizerWithFloat16Params
-        from steptron.utils import convert_num
+        from steptronoss.optimizer.utils import advanced_get_param_groups
+        from steptronoss.utils import convert_num
 
-        extra_tags = dict()
-        if self.optimizer == "muon":
-            # make sure prepare_model_for_muon is called in setup_model
-            # copy muon flag into param groups' tags
-            extra_tags["use_muon"] = lambda name, param: getattr(
-                param, "is_muon_param", False
-            )
-
-        # param_groups = get_param_groups(model, None, get_vision_tower_lr)
         param_groups = advanced_get_param_groups(
             model,
             scale_lr_cond=self.scale_lr_func,
             scale_wd_cond=self.scale_wd_cond,
-            **extra_tags,
         )
 
         for idx, group in enumerate(param_groups):
@@ -128,82 +94,70 @@ class OptimizerConfig(AbstractOptimizerConfig):
                 f"{extra}"
             )
 
-        if len(param_groups) == 0:
-            optimizer = DummyOptimizer()
-        elif self.optimizer == "adam":
-            optimizer = Adam(
-                param_groups,
-                lr=self.lr,
-                weight_decay=self.weight_decay,
-                betas=(self.adam_beta1, self.adam_beta2),
-                eps=self.adam_eps,
-            )
-        elif self.optimizer == "muon":
-            optimizer = Muon(
-                param_groups,
-                lr=self.lr,
-                weight_decay=self.weight_decay,
-                matched_adamw_rms=self.muon_matched_adamw_rms,
-                momentum=self.muon_momentum,
-                nesterov=self.muon_nesterov,
-                ns_steps=self.muon_ns_steps,
-                adamw_betas=(self.adam_beta1, self.adam_beta2),
-                adamw_eps=self.adam_eps,
-                run_ns_in_fp32=self.muon_run_ns_in_fp32,
-                run_ns_in_fp16=self.muon_run_ns_in_fp16,
-                log_muon_updates_grad_norms=self.muon_log_updates_grad_norms,
-                newtonschulz_fn=self.muon_newtonschulz_fn,
-                batch_compute_mem_size=self.muon_batch_compute_mem_size,
-            )
-        else:
-            raise ValueError(f"Invalid optimizer: {self.optimizer}")
-
-        # Mixed precision optimizer.
-        # - Note: both the Float16Optimizer and the DistributedOptimizer inherit
-        #   from the MixedPrecisionOptimizer, which manages any optimizer where
-        #   the model params and main params are distinct.
-        if (
-            self.params_dtype in [torch.float16, torch.bfloat16]
-            or self.use_distributed_optimizer
-        ):
-            grad_scaler = self.build_loss_scaler()
-            optimizer_cls = (
-                LocalDPOptimizer
-                if self.use_distributed_optimizer
-                else Float16OptimizerWithFloat16Params
-            )
-            return optimizer_cls(
-                optimizer,
-                clip_grad=self.clip_grad,
-                log_num_zeros_in_grad=self.log_num_zeros_in_grad,
-                params_have_main_grad=True,
-                use_contiguous_buffers_in_local_ddp=self.use_contiguous_buffers_in_local_ddp,
-                fp16=self.params_dtype == torch.float16,
-                bf16=self.params_dtype == torch.bfloat16,
-                params_dtype=self.params_dtype,
-                grad_scaler=grad_scaler,
-                models=model,
-            )
-        raise NotImplementedError
+        return Adam(
+            param_groups,
+            lr=self.lr,
+            weight_decay=self.weight_decay,
+            betas=(self.adam_beta1, self.adam_beta2),
+            eps=self.adam_eps,
+        )
 
     def sanity_check(self) -> None:
         super().sanity_check()
-        if self.optimizer == "muon":
-            assert int(self.muon_run_ns_in_fp16) + int(self.muon_run_ns_in_fp32) <= 1
-            assert self.use_contiguous_buffers_in_local_ddp
+        # if self.optimizer == "muon":
+        #     assert int(self.muon_run_ns_in_fp16) + int(self.muon_run_ns_in_fp32) <= 1
 
-            if self.muon_log_updates_grad_norms:
-                assert self.log_detailed_grad_norms
+        #     if self.muon_log_updates_grad_norms:
+        #         assert self.log_detailed_grad_norms
 
-            assert self.muon_auto_applier_attn_pack_param_strategy in [
-                "split_by_head",
-                "split_by_type",
-                "no_split",
-            ]
-            assert self.muon_auto_applier_glu_pack_param_strategy in [
-                "split_by_type",
-                "no_split",
-            ]
+        #     assert self.muon_auto_applier_attn_pack_param_strategy in [
+        #         "split_by_head",
+        #         "split_by_type",
+        #         "no_split",
+        #     ]
+        #     assert self.muon_auto_applier_glu_pack_param_strategy in [
+        #         "split_by_type",
+        #         "no_split",
+        #     ]
+
+
+class GradientManagerConfig(Config):
+    optimizer_cfg = OptimizerConfig
+
+    params_dtype: torch.dtype
+
+    use_distributed_optimizer: bool = True
+    optimizer_distribute_granularity: Literal["byte", "tensor"] = "tensor"
+    """Under DistributedOptimizer (zero1), optimizer state can be sharded by bytes or by tensors.
+    
+    - raw: [Tensor(size=100), Tensor(size=59)]
+    - Bytes  @dp2: [Tensor(size=80, partial)], [Tensor(size=20, partial), Tensor(size=59), Pad(1)]
+    - Tensor @dp2: [Tensor(size=100)], [Tensor(size=59)]
+
+    - byte distribution can leverage reduce_scatter optimization, with less comm. But 
+    does not support optimizer like muon (need grad for full tensor).
+
+    """
+
+    clip_grad: float = 1.0
+    log_detailed_grad_norms: bool = Ref("..trainer_cfg.log_detailed_grad_norms")
+
+    log_num_zeros_in_grad: bool = Ref("..trainer_cfg.log_num_zeros_in_grad")
+
+    def build_gradient_manager(self, model: torch.nn.Module):
+        from steptronoss.optimizer.base_gradient_manager import DummyOptimizer
+        from steptronoss.optimizer.gradient_manager import AccInFP32GradientManager
+        from steptronoss.optimizer.zero1_gradient_manager import Zero1GradientManager
+
+        optimizer = self.optimizer_cfg.build_optimizer(model)
+
+        if not optimizer.param_groups:
+            return DummyOptimizer()
+
+        if self.use_distributed_optimizer:
+            return Zero1GradientManager(cfg=self, model=model, optimizer=optimizer)
+        else:
+            return AccInFP32GradientManager(cfg=self, model=model, optimizer=optimizer)
 
 
 class SchedulerConfig(AbstractSchedulerConfig):
@@ -289,9 +243,6 @@ class TrainerConfig(AbstractTrainerConfig):
     offload_optimizer_state: bool = False
 
     non_blocking_offload: bool = True
-
-    data_parallel_random_init: bool = False
-    """Use different seed for different dp rank"""
 
     global_data_keys: Optional[list[str]] = Ref("..data_cfg.global_data_keys", None)
     """When set, broadcast data[key] to all ranks (not only on data-source ranks)."""
@@ -526,6 +477,13 @@ class TrainerConfig(AbstractTrainerConfig):
         raise NotImplementedError
 
 
+class ProfilerConfig(Config):
+    timing_log_level = 0
+    timing_use_event = True
+
+    log_path = Ref("..log_path", "./")
+
+
 class TokenizerConfig(AbstractTokenizerConfig):
     vocab_size: int = 65536
 
@@ -611,10 +569,6 @@ class CheckpointConfig(Config):
 
     use_distributed_optimizer: bool = Ref(
         "..optimizer_cfg.use_distributed_optimizer", False
-    )
-
-    data_parallel_random_init: bool = Ref(
-        "..trainer_cfg.data_parallel_random_init", False
     )
 
     exp_name: str = Ref("..exp_name", "")
@@ -805,14 +759,12 @@ class MegatronOptimizedModelConfig(AbstractModelConfig):
 
     DDP_impl: str = "local"
     overlap_dp_vpp: bool = False
-    use_contiguous_buffers_in_local_ddp: bool = True
     distribute_saved_activations: bool = False
 
     check_nan: bool = True
     """check nan on every rank"""
 
     embedding_weights_in_fp32: bool = False
-    accumulate_allreduce_grads_in_fp32: bool = True
     gradient_accumulation_fusion: bool = True
 
     use_flash_attn: bool = True
@@ -977,13 +929,6 @@ class ModelConfig(Megatron3DParallelModelConfig):
         else:
             assert self.parallel_cfg.expert_model_parallel_size == 1
 
-        if self.params_dtype == torch.bfloat16:
-            assert (
-                self.accumulate_allreduce_grads_in_fp32 == True
-            ), "accumulate and all-reduce gradients in fp32 for bfloat16 data type."
-        if self.accumulate_allreduce_grads_in_fp32:
-            assert self.DDP_impl == "local"
-            assert self.use_contiguous_buffers_in_local_ddp
         if (
             self.parallel_cfg.virtual_pipeline_model_parallel_size > 1
             or self.parallel_cfg.pipeline_model_parallel_size > 1

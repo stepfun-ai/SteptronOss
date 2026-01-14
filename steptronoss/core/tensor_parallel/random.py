@@ -5,6 +5,7 @@
 
 import contextlib
 import os
+
 import torch
 from torch import _C
 from torch.cuda import _lazy_call
@@ -216,9 +217,8 @@ class CheckpointFunction(torch.autograd.Function):
         return (None, None, None) + grads
 
 
-
-
 from loguru import logger
+
 
 class CheckpointFunctionWithSanityCheck(torch.autograd.Function):
     """This function is adapted from torch.utils.checkpoint with
@@ -296,7 +296,9 @@ class CheckpointFunctionWithSanityCheck(torch.autograd.Function):
 
         if not torch.allclose(fwd_outputs, outputs, atol=1e-6):
             maxdiff = (fwd_outputs - outputs).abs().max()
-            logger.warning(f"Checkpoint function with sanity check failed, diff: {maxdiff}")
+            logger.warning(
+                f"Checkpoint function with sanity check failed, diff: {maxdiff}"
+            )
 
         # Set the states back to what it was at the start of this function.
         torch.set_rng_state(bwd_cpu_rng_state)

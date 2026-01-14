@@ -1,10 +1,11 @@
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 
-import torch
 from typing import List, Sequence
 
-from steptronoss.core.utils import divide
+import torch
+
 from steptronoss.core.parallel_state import PM
+from steptronoss.core.utils import divide
 
 
 def split_tensor_along_last_dim(

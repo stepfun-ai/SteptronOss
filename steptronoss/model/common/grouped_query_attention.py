@@ -11,8 +11,8 @@ from steptronoss.core.context_parallel import (
 from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import MegatronTPModelConfig
 from steptronoss.model.common.attention_core import FlashAttention
+from steptronoss.model.common.rms_norm import RMSNorm
 from steptronoss.model.common.rope import YARNRoPE
-from SteptronOss.steptronoss.model.common.rms_norm import RMSNorm
 from steptronoss.utils import safediv
 
 

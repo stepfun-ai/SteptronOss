@@ -14,14 +14,13 @@ from tabulate import tabulate
 from torch.nn.parallel import DistributedDataParallel as torchDDP
 
 from steptronoss.core.parallel_state import PM, get_virtual_pipeline_model_parallel_rank
-from steptronoss.model.distributed import DistributedDataParallel as localDDP
-from steptronoss.model.module import Float16Module, MegatronModule
+from steptronoss.model.module import MegatronModule, ModelWrapperBase
 
 from .general import convert_num
 
 
 def unwrap_model(
-    model, module_instances=(torchDDP, localDDP, Float16Module)
+    model, module_instances=(torchDDP, ModelWrapperBase)
 ) -> MegatronModule:
     return_list = True
     if not isinstance(model, list):
@@ -44,9 +43,7 @@ def calc_params_l2_norm(model, is_bf16=False):
         param_is_not_tensor_parallel_duplicate,
     )
     from steptronoss.core.utils import multi_tensor_applier, multi_tensor_l2_norm
-
-    def param_is_not_shared(param):
-        return not hasattr(param, "shared") or not param.shared
+    from steptronoss.model.module import param_is_not_shared
 
     if not isinstance(model, list):
         model = [model]

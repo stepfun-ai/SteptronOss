@@ -7,8 +7,8 @@ class LinearSchedulerConfig(SchedulerConfig):
 
     def build_scheduler(self, optimizer, *args):
         from steptronoss.optimizer.hparam_scheduler import (
-            Scheduler,
             FuncLinear,
+            Scheduler,
         )
 
         scheduler = Scheduler(
@@ -25,11 +25,12 @@ class LinearSchedulerConfig(SchedulerConfig):
 
         return scheduler
 
+
 class CosineSchedulerConfig(SchedulerConfig):
     def build_scheduler(self, optimizer, *args):
         from steptronoss.optimizer.hparam_scheduler import (
-            Scheduler,
             FuncCosineDecr,
+            Scheduler,
         )
 
         scheduler = Scheduler(
@@ -45,6 +46,7 @@ class CosineSchedulerConfig(SchedulerConfig):
         )
 
         return scheduler
+
 
 class TokenBasedSchedulerConfig(SchedulerConfig):
     scheduler_unit = "token"

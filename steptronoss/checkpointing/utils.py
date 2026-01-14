@@ -73,7 +73,7 @@ def analyze_dir(path):
     return tp, pp, dp
 
 
-def get_rng_state(data_parallel_random_init):
+def get_rng_state():
     """collect rng state across data parallel ranks"""
     rng_state = {
         "random_rng_state": random.getstate(),
@@ -83,17 +83,6 @@ def get_rng_state(data_parallel_random_init):
         "rng_tracker_states": tensor_parallel.get_cuda_rng_tracker().get_states(),
     }
 
-    rng_state_list = None
-    if (
-        torch.distributed.is_initialized()
-        and mpu.get_data_parallel_world_size() > 1
-        and data_parallel_random_init
-    ):
-        rng_state_list = [None for i in range(mpu.get_data_parallel_world_size())]
-        torch.distributed.all_gather_object(
-            rng_state_list, rng_state, group=mpu.get_data_parallel_group()
-        )
-    else:
-        rng_state_list = [rng_state]
+    rng_state_list = [rng_state]
 
     return rng_state_list

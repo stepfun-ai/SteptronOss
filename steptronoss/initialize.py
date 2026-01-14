@@ -63,19 +63,17 @@ def set_random_seed(seed):
     torch.manual_seed(seed)
 
 
-def set_mpu_random_seed(seed_, data_parallel_random_init=False):
+def set_mpu_random_seed(seed_):
     logger.info(f"> setting random seeds to {seed_} ...", at=0)
 
     from steptronoss.core.tensor_parallel.random import (
         _CUDA_RNG_STATE_TRACKER,
-        _MODEL_PARALLEL_RNG_TRACKER_NAME,
         _EXPERT_MODEL_PARALLEL_RNG_TRACKER_NAME,
+        _MODEL_PARALLEL_RNG_TRACKER_NAME,
     )
 
     seed = seed_ + (100 * PM.rank_in("PP"))
     # Ensure different data parallel ranks get different seeds
-    if data_parallel_random_init:
-        seed = seed + (10 * PM.rank_in("DP"))
     set_random_seed(seed)
     if torch.cuda.device_count() == 0:
         return
