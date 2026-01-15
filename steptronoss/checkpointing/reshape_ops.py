@@ -3,10 +3,9 @@ import re
 from typing import Any, Callable
 
 import torch
+from configurize import DataClass
 from einops import rearrange
 from loguru import logger
-
-from configurize import DataClass
 
 from steptronoss.core.parallel_state import PM
 from steptronoss.utils.dist_utils import gather_dict
@@ -39,12 +38,7 @@ class ReshapeOp:
         raise NotImplementedError
 
     def __repr__(self):
-        return (
-            self.__class__.__qualname__
-            + "("
-            + ", ".join(f"{k}={v}" for k, v in self.__dict__.items())
-            + ")"
-        )
+        return self.__class__.__qualname__ + "(" + ", ".join(f"{k}={v}" for k, v in self.__dict__.items()) + ")"
 
     def __add__(self, other: "ReshapeOp"):
         assert isinstance(other, ReshapeOp)
@@ -204,9 +198,7 @@ class KeepThisEP(ReshapeOp):
 class VocabPad(ReshapeOp):
     """{A: (V, C)} -> {A: (PV, C)}"""
 
-    def __init__(
-        self, target_vocab_size: int, dim: int, pad_type="last", actual_vocab_size=None
-    ):
+    def __init__(self, target_vocab_size: int, dim: int, pad_type="last", actual_vocab_size=None):
         super().__init__()
         self.target_vocab_size = target_vocab_size
         self.dim = dim
@@ -221,9 +213,9 @@ class VocabPad(ReshapeOp):
         elif orig_vocab_size < to:  # Pad
             padding_size = to - orig_vocab_size
             if self.pad_type == "last":
-                padder = torch.narrow(
-                    tensor, dim=self.dim, start=orig_vocab_size - 1, length=1
-                ).repeat_interleave(padding_size, dim=self.dim)
+                padder = torch.narrow(tensor, dim=self.dim, start=orig_vocab_size - 1, length=1).repeat_interleave(
+                    padding_size, dim=self.dim
+                )
             full_input_embed = torch.cat((tensor, padder), dim=self.dim)
         else:
             full_input_embed = tensor
@@ -318,9 +310,7 @@ class MHA_TP_CHUNK(ReshapeOp):
             k = k.chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
             v = v.chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
             qkv = torch.cat([q, k, v], dim=0)
-            new_pieces[key] = [
-                qkv if i == PM.rank_in("TP") else None for i in range(PM.size_of("TP"))
-            ]
+            new_pieces[key] = [qkv if i == PM.rank_in("TP") else None for i in range(PM.size_of("TP"))]
         return new_pieces
 
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
@@ -353,9 +343,7 @@ class GQAMergeQKV(ReshapeOp):
         q = piece[qk].chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
         k = piece[kk].chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
         v = piece[vk].chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
-        kv = rearrange(
-            [k, v], "T (g h) d -> (g T h) d", T=2, g=self.group_num // PM.size_of("TP")
-        )
+        kv = rearrange([k, v], "T (g h) d -> (g T h) d", T=2, g=self.group_num // PM.size_of("TP"))
         qkv = torch.cat([q, kv], dim=0)
         return {
             common_pattern(piece.keys()).format("qkv"): [
@@ -378,9 +366,7 @@ class GQAMergeQKV(ReshapeOp):
                 [n_q_dims, n_kv_dims],
                 dim=0,
             )
-            k, v = rearrange(
-                kv, "(g T h) d -> T (g h) d", T=2, g=self.group_num // PM.size_of("TP")
-            )
+            k, v = rearrange(kv, "(g T h) d -> T (g h) d", T=2, g=self.group_num // PM.size_of("TP"))
             qs.append(q)
             ks.append(k)
             vs.append(v)
@@ -407,9 +393,7 @@ class GQAMergeQKVBias(ReshapeOp):
         q = piece[qk].chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
         k = piece[kk].chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
         v = piece[vk].chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
-        kv = rearrange(
-            [k, v], "T (g h) -> (g T h)", T=2, g=self.group_num // PM.size_of("TP")
-        )
+        kv = rearrange([k, v], "T (g h) -> (g T h)", T=2, g=self.group_num // PM.size_of("TP"))
         qkv = torch.cat([q, kv], dim=0)
         return {
             common_pattern(piece.keys()).format("qkv"): [
@@ -432,9 +416,7 @@ class GQAMergeQKVBias(ReshapeOp):
                 [n_q_dims, n_kv_dims],
                 dim=0,
             )
-            k, v = rearrange(
-                kv, "(g T h) -> T (g h)", T=2, g=self.group_num // PM.size_of("TP")
-            )
+            k, v = rearrange(kv, "(g T h) -> T (g h)", T=2, g=self.group_num // PM.size_of("TP"))
             qs.append(q)
             ks.append(k)
             vs.append(v)
@@ -466,9 +448,7 @@ class GQAMergeQKVG(ReshapeOp):
         k = piece[kk].chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
         v = piece[vk].chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
         g = piece[gk].chunk(PM.size_of("TP"), 0)[PM.rank_in("TP")]
-        kv = rearrange(
-            [k, v], "T (g h) d -> (g T h) d", T=2, g=self.group_num // PM.size_of("TP")
-        )
+        kv = rearrange([k, v], "T (g h) d -> (g T h) d", T=2, g=self.group_num // PM.size_of("TP"))
         qkv = torch.cat([q, kv, g], dim=0)
         return {
             common_pattern(piece.keys()).format("qkv"): [
@@ -492,9 +472,7 @@ class GQAMergeQKVG(ReshapeOp):
                 [n_q_dims, n_kv_dims, n_g_dims],
                 dim=0,
             )
-            k, v = rearrange(
-                kv, "(g T h) d -> T (g h) d", T=2, g=self.group_num // PM.size_of("TP")
-            )
+            k, v = rearrange(kv, "(g T h) d -> T (g h) d", T=2, g=self.group_num // PM.size_of("TP"))
             qs.append(q)
             ks.append(k)
             vs.append(v)
@@ -528,8 +506,7 @@ class FFNMergeGateUp(ReshapeOp):
         w1 = torch.cat([gate, up], dim=-2)
         return {
             common_pattern(piece.keys()).format("gate_up"): [
-                w1 if i == PM.rank_in(self.group) else None
-                for i in range(PM.size_of(self.group))
+                w1 if i == PM.rank_in(self.group) else None for i in range(PM.size_of(self.group))
             ]
         }
 
@@ -563,9 +540,7 @@ class UnbindMoE(ReshapeOp):
         new_piece = {}
         for k, v in piece.items():
             for i, vv in enumerate(v.unbind()):
-                new_piece[
-                    k.replace(self.moe_key_prefix, f"{self.moe_key_prefix}{i}.")
-                ] = vv
+                new_piece[k.replace(self.moe_key_prefix, f"{self.moe_key_prefix}{i}.")] = vv
         return new_piece
 
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
@@ -650,16 +625,12 @@ class OnlineReshaper(ReshapeOp):
     def check_forwardable(self):
         forward_fail = [s for s in self.scripts if s.src is None]
         if forward_fail:
-            raise RuntimeError(
-                f".src not defined for {forward_fail}, call backward to auto-record."
-            )
+            raise RuntimeError(f".src not defined for {forward_fail}, call backward to auto-record.")
 
     def check_backwardable(self):
         backward_fail = [s for s in self.scripts if s.dst is None]
         if backward_fail:
-            raise RuntimeError(
-                f".dst not defined for {backward_fail}, call forward to auto-record."
-            )
+            raise RuntimeError(f".dst not defined for {backward_fail}, call forward to auto-record.")
 
     @staticmethod
     def get_piece_by_pattern(weights: dict, patterns: str | list[str]) -> dict:

@@ -1,11 +1,17 @@
+from __future__ import annotations
+
+from typing import Optional
+
 import torch
+from configurize import Config, Ref
 
 from steptronoss.core import tensor_parallel
-from steptronoss.exp.base_exp import MegatronTPModelConfig
+from steptronoss.exp.base_exp import MegatronTPConfig
 from steptronoss.model.common.rms_norm import RMSNorm
 
 
-class InputEmbeddingConfig(MegatronTPModelConfig):
+class InputEmbeddingConfig(Config):
+    tp_cfg: MegatronTPConfig = Ref("..tp_cfg")
     vocab_size: int
     hidden_size: int
     embedding_weights_in_fp32: bool
@@ -15,7 +21,8 @@ class InputEmbeddingConfig(MegatronTPModelConfig):
         return WordEmbedding(cfg=self)
 
 
-class OutputEmbeddingConfig(MegatronTPModelConfig):
+class OutputEmbeddingConfig(Config):
+    tp_cfg: MegatronTPConfig = Ref("..tp_cfg")
     vocab_size: int
     hidden_size: int
     fp32_rms_norm: bool
@@ -25,8 +32,8 @@ class OutputEmbeddingConfig(MegatronTPModelConfig):
 
     gather_output: bool
 
-    def build_model(self):
-        return OutputEmbedding(cfg=self)
+    def build_model(self, tied_embedding_weight: Optional[torch.Tensor] = None):
+        return OutputEmbedding(cfg=self, tied_word_embedding_weight=tied_embedding_weight)
 
 
 class WordEmbedding(torch.nn.Module):
@@ -39,14 +46,14 @@ class WordEmbedding(torch.nn.Module):
 
         # Word embeddings (parallel).
         self.embedding_weights_in_fp32 = cfg.embedding_weights_in_fp32
-        self.params_dtype = cfg.params_dtype
+        self.params_dtype = cfg.tp_cfg.params_dtype
 
         self.word_embeddings = tensor_parallel.SimpleVocabParallelEmbedding(
-            cfg.vocab_size, self.hidden_size, params_dtype=cfg.params_dtype
+            cfg.vocab_size, self.hidden_size, params_dtype=cfg.tp_cfg.params_dtype
         )
 
         self.fp32_residual_connection = cfg.fp32_residual_connection
-        self.sequence_parallel = cfg.sequence_parallel
+        self.sequence_parallel = cfg.tp_cfg.sequence_parallel
 
     def forward(self, input_ids, **kwargs):
         # Embeddings.
@@ -73,12 +80,16 @@ class WordEmbedding(torch.nn.Module):
 
 
 class OutputEmbedding(torch.nn.Module):
-    def __init__(self, cfg: OutputEmbeddingConfig):
+    def __init__(
+        self,
+        cfg: OutputEmbeddingConfig,
+        tied_word_embedding_weight: Optional[torch.Tensor],
+    ):
         super().__init__()
         self.norm = RMSNorm(
             cfg.hidden_size,
             eps=cfg.layernorm_epsilon,
-            sequence_parallel=cfg.sequence_parallel,
+            sequence_parallel=cfg.tp_cfg.sequence_parallel,
             use_fp32=cfg.fp32_rms_norm,
             use_zero_init=cfg.rms_norm_zero_gamma,
         )
@@ -87,10 +98,11 @@ class OutputEmbedding(torch.nn.Module):
             cfg.vocab_size,
             bias=False,
             gather_output=cfg.gather_output,
-            async_tensor_model_parallel_allreduce=cfg.async_tensor_model_parallel_allreduce,
-            params_dtype=cfg.params_dtype,
-            gradient_accumulation_fusion=cfg.gradient_accumulation_fusion,
-            sequence_parallel_enabled=cfg.sequence_parallel,
+            async_tensor_model_parallel_allreduce=cfg.tp_cfg.async_tensor_model_parallel_allreduce,
+            params_dtype=cfg.tp_cfg.params_dtype,
+            gradient_accumulation_fusion=cfg.tp_cfg.gradient_accumulation_fusion,
+            sequence_parallel_enabled=cfg.tp_cfg.sequence_parallel,
+            tie_word_embeddings_weight=tied_word_embedding_weight,
         )
 
     def forward(self, hidden_states, **kwargs):

@@ -1,16 +1,9 @@
+from __future__ import annotations
+
 import copy
 import os
 from functools import cached_property
-from typing import (
-    Any,
-    Callable,
-    ForwardRef,
-    Iterable,
-    Iterator,
-    Literal,
-    NoReturn,
-    Optional,
-)
+from typing import TYPE_CHECKING, Any, Callable, ForwardRef, Iterable, Iterator, Literal, NoReturn, Optional
 
 import torch
 import torch.distributed
@@ -26,6 +19,9 @@ from steptronoss.exp.abstract import ParallelConfig as AbstractParallelConfig
 from steptronoss.exp.abstract import SchedulerConfig as AbstractSchedulerConfig
 from steptronoss.exp.abstract import TokenizerConfig as AbstractTokenizerConfig
 from steptronoss.exp.abstract import TrainerConfig as AbstractTrainerConfig
+
+if TYPE_CHECKING:
+    from steptron.core.pipeline_parallel.schedules import FWBWScheduler
 
 TrainerHook = Callable[[ForwardRef("Trainer")], NoReturn]
 
@@ -67,9 +63,7 @@ class OptimizerConfig(AbstractOptimizerConfig):
         return 1.0
 
     def scale_wd_cond(self, name: str, param: Parameter) -> float:
-        if name.endswith(".bias") or (
-            len(param.shape) == 1 and not self.weight_decay_on_1d_params
-        ):
+        if name.endswith(".bias") or (len(param.shape) == 1 and not self.weight_decay_on_1d_params):
             return 0.0
         return 1.0
 
@@ -124,17 +118,17 @@ class OptimizerConfig(AbstractOptimizerConfig):
 class GradientManagerConfig(Config):
     optimizer_cfg = OptimizerConfig
 
-    params_dtype: torch.dtype
+    params_dtype: torch.dtype = Ref("..model_cfg.params_dtype")
 
     use_distributed_optimizer: bool = True
     optimizer_distribute_granularity: Literal["byte", "tensor"] = "tensor"
     """Under DistributedOptimizer (zero1), optimizer state can be sharded by bytes or by tensors.
-    
+
     - raw: [Tensor(size=100), Tensor(size=59)]
     - Bytes  @dp2: [Tensor(size=80, partial)], [Tensor(size=20, partial), Tensor(size=59), Pad(1)]
     - Tensor @dp2: [Tensor(size=100)], [Tensor(size=59)]
 
-    - byte distribution can leverage reduce_scatter optimization, with less comm. But 
+    - byte distribution can leverage reduce_scatter optimization, with less comm. But
     does not support optimizer like muon (need grad for full tensor).
 
     """
@@ -264,9 +258,7 @@ class TrainerConfig(AbstractTrainerConfig):
     # support multiple backends
     writer_backend: list[str] = ["tensorboard"]
 
-    def make_logs(
-        self, iteration: int, metrics: dict[str, Tensor], tb_writer: Any = None
-    ) -> dict[str, Any]:
+    def make_logs(self, iteration: int, metrics: dict[str, Tensor], tb_writer: Any = None) -> dict[str, Any]:
         """Handle custom metrics and decide which goes tensorboard & which goes log file
         NOTE: tb_writer only available on RANK_LAST
 
@@ -282,32 +274,18 @@ class TrainerConfig(AbstractTrainerConfig):
         from steptron.utils.metrics import GlobalMetrics, HistogramMetric
 
         if tb_writer is not None:
-            scalars = {
-                k: v.float()
-                for k, v in metrics.items()
-                if (torch.is_tensor(v) and v.numel() == 1)
-            }
-            scalars.update(
-                {k: v for k, v in metrics.items() if isinstance(v, (float, int))}
-            )
+            scalars = {k: v.float() for k, v in metrics.items() if (torch.is_tensor(v) and v.numel() == 1)}
+            scalars.update({k: v for k, v in metrics.items() if isinstance(v, (float, int))})
 
-            vector_metrics = {
-                k: v
-                for k, v in metrics.items()
-                if (torch.is_tensor(v) and v.numel() > 1)
-            }
+            vector_metrics = {k: v for k, v in metrics.items() if (torch.is_tensor(v) and v.numel() > 1)}
             for key in scalars:
                 tb_writer.add_scalar(key, scalars[key], iteration)
             for key in vector_metrics:
                 if isinstance(GlobalMetrics.metrics[key], HistogramMetric):
-                    tb_writer.add_histogram(
-                        str(key), vector_metrics[key].cpu().float().flatten(), iteration
-                    )
+                    tb_writer.add_histogram(str(key), vector_metrics[key].cpu().float().flatten(), iteration)
             # NOTE: add text metric to tb logic
             text_metrics = {
-                k: v
-                for k, v in metrics.items()
-                if isinstance(v, list) and len(v) > 0 and isinstance(v[0], str)
+                k: v for k, v in metrics.items() if isinstance(v, list) and len(v) > 0 and isinstance(v[0], str)
             }
             for key in text_metrics:
                 for idx, text in enumerate(text_metrics[key]):
@@ -324,9 +302,7 @@ class TrainerConfig(AbstractTrainerConfig):
         # Note: `sync_get_data()` only calls `next(data_iterator)` on CP-src rank
         # (and then broadcasts within CP group). So we should only build
         # dataloaders on CP-src to avoid duplicated loader processes/threads.
-        return (PM.i_am("PP", 0) or PM.i_am("PP", -1)) and (
-            PM.i_am("TP", 0) and PM.i_am("CP", 0)
-        )
+        return (PM.i_am("PP", 0) or PM.i_am("PP", -1)) and (PM.i_am("TP", 0) and PM.i_am("CP", 0))
 
     def sync_get_data(self, data_iterator: Iterator[Any]) -> dict[str, Any]:
         # This function Get/Broadcast/Preprocess and return data ready-to-use
@@ -334,8 +310,8 @@ class TrainerConfig(AbstractTrainerConfig):
 
         from steptronoss.core.parallel_state import (
             PM,
-            get_virtual_pipeline_model_parallel_rank,
-            get_virtual_pipeline_model_parallel_world_size,
+            get_vpp_rank,
+            get_vpp_size,
         )
         from steptronoss.utils import broadcast_tensors
 
@@ -370,13 +346,11 @@ class TrainerConfig(AbstractTrainerConfig):
             data = NonOfHeadOrTail()  # Mark these ranks for global_data broadcast
 
         if self.global_data_keys:
-            vpp_rank = get_virtual_pipeline_model_parallel_rank() or 0
-            vpp_size = get_virtual_pipeline_model_parallel_world_size() or 1
+            vpp_rank = get_vpp_rank() or 0
+            vpp_size = get_vpp_size() or 1
             with get_timers().record("broadcast-tensors-pp", log_level=2):
                 if vpp_rank == 0:
-                    pp_sync_data = [data.__class__] + [
-                        data.get(k, None) for k in self.global_data_keys
-                    ]
+                    pp_sync_data = [data.__class__] + [data.get(k, None) for k in self.global_data_keys]
                     pp_sync_data = broadcast_tensors(
                         pp_sync_data,
                         src_rank=PM.ranks_of("PP")[0],
@@ -386,9 +360,7 @@ class TrainerConfig(AbstractTrainerConfig):
                     if not hasattr(self, "_cached_pp_sync_data"):
                         self._cached_pp_sync_data = [[] for _ in range(vpp_size - 1)]
                     for _vp in range(vpp_size - 1):
-                        self._cached_pp_sync_data[_vp].append(
-                            copy.deepcopy(pp_sync_data)
-                        )
+                        self._cached_pp_sync_data[_vp].append(copy.deepcopy(pp_sync_data))
                 else:
                     pp_sync_data = self._cached_pp_sync_data[vpp_rank - 1].pop(0)
 
@@ -567,9 +539,7 @@ class CheckpointConfig(Config):
 
     strict_load_model: bool = True
 
-    use_distributed_optimizer: bool = Ref(
-        "..optimizer_cfg.use_distributed_optimizer", False
-    )
+    use_distributed_optimizer: bool = Ref("..optimizer_cfg.use_distributed_optimizer", False)
 
     exp_name: str = Ref("..exp_name", "")
 
@@ -629,14 +599,10 @@ class MoEConfig(Config):
 
     # ===========================================================================================
     # deepseekv3 new features
-    enable_auxiliary_loss_free_load_balance: bool = (
-        False  # enable auxiliary loss free load balance
-    )
+    enable_auxiliary_loss_free_load_balance: bool = False  # enable auxiliary loss free load balance
     enable_sigmoid_router: bool = False  # enable sigmoid router
     enable_scaling_factor: bool = False  # enable scaling factor in moe
-    router_bias_update_rate: float = (
-        1e-4  # update rate in auxiliary loss free load balance
-    )
+    router_bias_update_rate: float = 1e-4  # update rate in auxiliary loss free load balance
     routed_scaling_factor: float = 1.0  # scaling factor for moe
     # ===========================================================================================
 
@@ -659,35 +625,7 @@ class MoEConfig(Config):
                 "so currently we only support EP-group-wise MoE aux loss, "
                 "(set use_ep_group_wise_aux_loss=True or disable moe_aux_loss_coef)."
             )
-        return (
-            self.micro_batch_size * self.data_parallel_size
-        ) / self.global_batch_size
-
-
-class PPConfig(Config):
-    """NOTE: this is a run-time build config, do not belongs to Exp."""
-
-    pp_rank: int = 0
-    pp_size: int = 1
-
-    pp_seq_length: int = 1024
-    pp_hidden_size: int = 1024
-    pp_micro_batch_size: int = 1
-    pp_comm_type: torch.dtype = torch.bfloat16
-
-    @property
-    def pp_comm_shape(self) -> tuple[int, int, int]:
-        return (self.pp_seq_length, self.pp_micro_batch_size, self.pp_hidden_size)
-
-    variable_seq_lengths: bool = False
-
-    overlap_dp_vpp: bool = False
-    overlap_p2p_comm: bool = True
-    check_nan: bool = True
-
-    scatter_gather_tensors_in_pipeline: bool = False
-
-    sequence_parallel: bool = False
+        return (self.micro_batch_size * self.data_parallel_size) / self.global_batch_size
 
 
 class ParallelConfig(AbstractParallelConfig):
@@ -723,21 +661,20 @@ class ParallelConfig(AbstractParallelConfig):
             "etp": self.expert_tensor_parallel_size,
         }
 
-        parallel_groups = {
-            k: PM.define_parallel(v, **args)
-            for k, v in self.parallel_definition.items()
-        }
+        parallel_groups = {k: PM.define_parallel(v, **args) for k, v in self.parallel_definition.items()}
 
         return parallel_groups
 
 
-class MegatronTPModelConfig(AbstractModelConfig):
-    params_dtype: torch.dtype = torch.bfloat16
+class MegatronTPConfig(AbstractModelConfig):
+    params_dtype: torch.dtype = Ref("..params_dtype")
 
     sequence_parallel: bool = False
 
     gradient_accumulation_fusion: bool = True
     async_tensor_model_parallel_allreduce: bool = True
+
+    distribute_saved_activations: bool = False
 
     def get_tp_kwargs(self) -> dict[str, Any]:
         return {
@@ -747,48 +684,55 @@ class MegatronTPModelConfig(AbstractModelConfig):
         }
 
 
-class MegatronOptimizedModelConfig(AbstractModelConfig):
+class MegatronPPModelConfig(AbstractModelConfig):
     params_dtype: torch.dtype = torch.bfloat16
 
-    scatter_gather_tensors_in_pipeline: bool = True
     overlap_p2p_comm: bool = True
 
     # Used for P2P comm pre-allocation
-    seq_length: int = Ref("..trainer_cfg.global_seq_length", 4096)
-    micro_batch_size: int = Ref("..trainer_cfg.micro_batch_size", 1)
-
-    DDP_impl: str = "local"
-    overlap_dp_vpp: bool = False
-    distribute_saved_activations: bool = False
+    variable_seq_lengths: bool = False  # disable for pretrain
+    pp_comm_shape: tuple[int] = None
 
     check_nan: bool = True
     """check nan on every rank"""
 
-    embedding_weights_in_fp32: bool = False
     gradient_accumulation_fusion: bool = True
+    fp32_residual_connection: bool = False
 
-    use_flash_attn: bool = True
-    variable_seq_lengths: bool = False  # disable for pretrain
+    def get_pp_scheduler(self) -> FWBWScheduler:
+        from steptronoss.core.parallel_state import PM, get_vpp_size
+        from steptronoss.core.pipeline_parallel.schedules import (
+            FWBWScheduler,
+            PPScheduler,
+            VPPScheduler,
+        )
+
+        if PM.size_of("PP") > 1:
+            if get_vpp_size() > 1:
+                return VPPScheduler(config=self)
+            else:
+                return PPScheduler(config=self)
+        else:
+            return FWBWScheduler(config=self)
+
+    def sanity_check(self):
+        super().sanity_check()
+        if not self.variable_seq_lengths:
+            assert self.pp_comm_shape is not None
 
 
-class Megatron3DParallelModelConfig(
-    MegatronTPModelConfig, MegatronOptimizedModelConfig
-):
+class Megatron3DParallelModelConfig(MegatronPPModelConfig):
+    tp_cfg: MegatronTPConfig = MegatronTPConfig
     parallel_cfg = ParallelConfig
 
-    global_seq_length = Ref("..trainer_cfg.global_seq_length", 4096)
+    global_seq_length = Ref("..trainer_cfg.global_seq_length")
+    micro_batch_size = Ref("..trainer_cfg.micro_batch_size")
+    hidden_size: int
 
-    @property
-    def seq_length(self):
-        return self.global_seq_length // self.parallel_cfg.context_parallel_size
-
-    @property
-    def data_parallel_size(self):
-        return int(os.getenv("WORLD_SIZE", "1")) // (
-            self.parallel_cfg.tensor_model_parallel_size
-            * self.parallel_cfg.pipeline_model_parallel_size
-            * self.parallel_cfg.context_parallel_size
-        )
+    @writable_property
+    def pp_comm_shape(self):
+        seq_length = self.global_seq_length // self.parallel_cfg.context_parallel_size
+        return (seq_length, self.micro_batch_size, self.hidden_size)
 
 
 class RoPEConfig(Config):
@@ -892,12 +836,8 @@ class ModelConfig(Megatron3DParallelModelConfig):
     use_swiglu_limit_shared: float | list[float] = None
 
     # For muon
-    muon_auto_applier_attn_pack_param_strategy = Ref(
-        "..optimizer_cfg.muon_auto_applier_attn_pack_param_strategy"
-    )
-    muon_auto_applier_glu_pack_param_strategy = Ref(
-        "..optimizer_cfg.muon_auto_applier_glu_pack_param_strategy"
-    )
+    muon_auto_applier_attn_pack_param_strategy = Ref("..optimizer_cfg.muon_auto_applier_attn_pack_param_strategy")
+    muon_auto_applier_glu_pack_param_strategy = Ref("..optimizer_cfg.muon_auto_applier_glu_pack_param_strategy")
 
     def build_model(self):
         raise NotImplementedError
@@ -907,16 +847,9 @@ class ModelConfig(Megatron3DParallelModelConfig):
         if self.layer_types:
             assert len(self.layer_types) == self.num_layers
         if self.moe_cfg.use_moe:
-            assert (
-                self.moe_cfg.moe_num_experts
-                % self.parallel_cfg.expert_model_parallel_size
-                == 0
-            )
+            assert self.moe_cfg.moe_num_experts % self.parallel_cfg.expert_model_parallel_size == 0
             assert self.moe_cfg.moe_top_k <= self.moe_cfg.moe_num_experts
-            if (
-                self.parallel_cfg.expert_model_parallel_size > 1
-                and self.moe_cfg.moe_enable_group_gemm
-            ):
+            if self.parallel_cfg.expert_model_parallel_size > 1 and self.moe_cfg.moe_enable_group_gemm:
                 assert self.moe_cfg.moe_enable_deepep, (
                     "When expert_model_parallel_size > 1, grouped gemm(moe_enable_group_gemm=True) "
                     "requires DeepEP, set moe_enable_deepep to True"
@@ -929,13 +862,6 @@ class ModelConfig(Megatron3DParallelModelConfig):
         else:
             assert self.parallel_cfg.expert_model_parallel_size == 1
 
-        if (
-            self.parallel_cfg.virtual_pipeline_model_parallel_size > 1
-            or self.parallel_cfg.pipeline_model_parallel_size > 1
-        ):
-            assert self.DDP_impl == "local"
-        assert self.DDP_impl == "local"  # disable torch DDP for now
-
         if self.fp32_residual_connection:
             assert self.params_dtype in [
                 torch.float16,
@@ -944,22 +870,16 @@ class ModelConfig(Megatron3DParallelModelConfig):
 
         if self.distribute_saved_activations:
             assert self.parallel_cfg.tensor_model_parallel_size > 1, (
-                "can distribute "
-                "recomputed activations only across tensor model "
-                "parallel groups"
+                "can distribute " "recomputed activations only across tensor model " "parallel groups"
             )
             assert self.recompute_granularity == "full", (
-                "distributed recompute activations is only "
-                "application to full recompute granularity"
+                "distributed recompute activations is only " "application to full recompute granularity"
             )
         if self.parallel_cfg.tensor_model_parallel_size == 1:
             assert self.sequence_parallel == False
 
         if self.sequence_parallel:
             assert self.async_tensor_model_parallel_allreduce == False
-
-        if self.overlap_p2p_comm and not self.sequence_parallel:
-            self.scatter_gather_tensors_in_pipeline = False
 
         if os.getenv("CUDA_DEVICE_MAX_CONNECTIONS", None) != "1":
             assert not self.sequence_parallel, (

@@ -15,14 +15,14 @@ from steptronoss.core.context_parallel import (
 )
 from steptronoss.core.parallel_state import (
     PM,
-    get_virtual_pipeline_model_parallel_rank,
-    get_virtual_pipeline_model_parallel_world_size,
+    get_vpp_rank,
+    get_vpp_size,
 )
 from steptronoss.core.tensor_parallel import get_cuda_rng_tracker
 from steptronoss.core.tensor_parallel.random import (
     checkpoint,
 )
-from steptronoss.exp.base_exp import Megatron3DParallelModelConfig
+from steptronoss.exp.base_exp import Megatron3DParallelModelConfig, MegatronTPConfig
 from steptronoss.model.common.feed_forward import FeedForwardConfig
 from steptronoss.model.common.grouped_query_attention import AttentionConfig
 from steptronoss.model.common.parallel_embedding import (
@@ -40,7 +40,9 @@ class DecoderLLMConfig(Megatron3DParallelModelConfig):
     layernorm_epsilon: float
     rms_norm_zero_gamma: bool
     recompute_full: bool
+    tie_embedding: bool
 
+    tp_cfg = MegatronTPConfig
     ffn_cfg = FeedForwardConfig
     attn_cfg = AttentionConfig
     tok_embed_cfg = InputEmbeddingConfig
@@ -51,6 +53,12 @@ class DecoderLLMConfig(Megatron3DParallelModelConfig):
 
     def build_model(self):
         return LlamaLikeModel(cfg=self, layer_map=self.build_layermap())
+
+    def sanity_check(self):
+        super().sanity_check()
+        if self.tie_embedding:
+            if self.parallel_cfg.pipeline_model_parallel_size != 1:
+                raise NotImplementedError("Tie embedding for PP > 1")
 
 
 class TransformerBlock(nn.Module):
@@ -65,13 +73,13 @@ class TransformerBlock(nn.Module):
         self.cfg = cfg
         self.layer_id = layer_id
         self.recompute = recompute
-        self.sequence_parallel = cfg.sequence_parallel
+        self.sequence_parallel = cfg.tp_cfg.sequence_parallel
 
         # Pre-attention LayerNorm
         self.attention_norm = RMSNorm(
             cfg.hidden_size,
             eps=cfg.layernorm_epsilon,
-            sequence_parallel=cfg.sequence_parallel,
+            sequence_parallel=cfg.tp_cfg.sequence_parallel,
             use_zero_init=cfg.rms_norm_zero_gamma,
         )
 
@@ -79,7 +87,7 @@ class TransformerBlock(nn.Module):
         self.ffn_norm = RMSNorm(
             cfg.hidden_size,
             eps=cfg.layernorm_epsilon,
-            sequence_parallel=cfg.sequence_parallel,
+            sequence_parallel=cfg.tp_cfg.sequence_parallel,
             use_zero_init=cfg.rms_norm_zero_gamma,
         )
 
@@ -120,9 +128,7 @@ class TransformerBlock(nn.Module):
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
 
-    def _attn_forward(
-        self, x: torch.Tensor, cu_seqlens, max_seq_len, position_id, **kwargs
-    ) -> torch.Tensor:
+    def _attn_forward(self, x: torch.Tensor, cu_seqlens, max_seq_len, position_id, **kwargs) -> torch.Tensor:
         """Attention forward pass (can be recomputed)."""
         return self.attention(
             x,
@@ -152,7 +158,7 @@ class LlamaLikeModel(MegatronModule):
         super().__init__()
         self.cfg = cfg
 
-        self.sequence_parallel = cfg.sequence_parallel
+        self.sequence_parallel = cfg.tp_cfg.sequence_parallel
 
         # Build layer map if not provided
         if layer_map is None:
@@ -166,13 +172,16 @@ class LlamaLikeModel(MegatronModule):
             self.tok_embeddings = cfg.tok_embed_cfg.build_model()
         # Output embeddings (only on last pipeline stage)
         if self.is_pipeline_last_stage():
-            self.out_embeddings = cfg.out_embed_cfg.build_model()
+            if self.cfg.tie_embedding:
+                self.out_embeddings = cfg.out_embed_cfg.build_model(self.tok_embeddings.word_embeddings.weight)
+            else:
+                self.out_embeddings = cfg.out_embed_cfg.build_model()
 
     def _build_default_layer_map(self) -> dict:
         """Build default layer mapping for pipeline parallelism."""
         layer_map = dict()
         pp_size = PM.size_of("PP")
-        vp_size = get_virtual_pipeline_model_parallel_world_size()
+        vp_size = get_vpp_size()
         local_layers = self.cfg.num_layers // pp_size // vp_size
 
         layer_id = 0
@@ -181,9 +190,7 @@ class LlamaLikeModel(MegatronModule):
                 layer_map.setdefault(pp, dict())
                 layer_map[pp].setdefault(vp, dict())
                 for i in range(local_layers):
-                    layer_map[pp][vp][layer_id] = dict(
-                        recompute=self.cfg.recompute_full
-                    )
+                    layer_map[pp][vp][layer_id] = dict(recompute=self.cfg.recompute_full)
                     layer_id += 1
         return layer_map
 
@@ -191,7 +198,7 @@ class LlamaLikeModel(MegatronModule):
         """Build transformer layers for this pipeline stage."""
         blocks = nn.ModuleList()
         pp_rank = PM.rank_in("PP")
-        vp_rank = get_virtual_pipeline_model_parallel_rank()
+        vp_rank = get_vpp_rank()
         for layer, kwargs in self.layer_map[pp_rank][vp_rank].items():
             assert isinstance(layer, int), f"Layer ID must be Int, got {layer}"
             block = TransformerBlock(
@@ -223,9 +230,7 @@ class LlamaLikeModel(MegatronModule):
         position_id: [S, ] torch.int32 cuda
         """
         if PM.size_of("CP") > 1:
-            assert (
-                cu_seqlens is not None
-            ), "cu_seqlens required for CP, use [0, len(input_ids)] if you dont have one."
+            assert cu_seqlens is not None, "cu_seqlens required for CP, use [0, len(input_ids)] if you dont have one."
             if position_id is None:
                 position_id = get_position_id_from_cu_seqlens(cu_seqlens)
 

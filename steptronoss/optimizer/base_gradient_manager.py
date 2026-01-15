@@ -8,8 +8,8 @@ from torch.nn import Parameter
 from steptronoss.core import tensor_parallel
 from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import GradientManagerConfig
-from steptronoss.model.comm_buffer import SteptronParameter, build_grad_buffers
 from steptronoss.model.module import MegatronModule, param_is_not_shared
+from steptronoss.model.utils.comm_buffer import SteptronParameter, build_grad_buffers
 
 from .clip_grads import clip_grad_norm_fp32, count_zeros_fp32
 
@@ -72,9 +72,7 @@ class GradientManager(ABC):
         self.model = model
         self.optimizer = optimizer
 
-        self._grad_buffers, self._param_buffers, self._param_info = build_grad_buffers(
-            self.model
-        )
+        self._grad_buffers, self._param_buffers, self._param_info = build_grad_buffers(self.model)
 
         # attach slices onto tensor.main_grad
         for param, info in self._param_info.items():
@@ -183,13 +181,9 @@ class GradientManager(ABC):
             is_moe_param = getattr(param, "expert_model_parallel", False)
             # For moe params: only check EP duplicate; for attention params: only check TP duplicate
             if is_moe_param:
-                is_not_duplicate = (
-                    tensor_parallel.param_is_not_expert_parallel_duplicate(param)
-                )
+                is_not_duplicate = tensor_parallel.param_is_not_expert_parallel_duplicate(param)
             else:
-                is_not_duplicate = (
-                    tensor_parallel.param_is_not_tensor_parallel_duplicate(param)
-                )
+                is_not_duplicate = tensor_parallel.param_is_not_tensor_parallel_duplicate(param)
             if grad_not_none and is_not_shared and is_not_duplicate:
                 grads_for_norm.append(grad)
 
@@ -267,9 +261,7 @@ class GradientManager(ABC):
         self.model = model
         self.optimizer = optimizer
 
-        self._grad_buffers, self._param_buffers, self._param_info = build_grad_buffers(
-            self.model
-        )
+        self._grad_buffers, self._param_buffers, self._param_info = build_grad_buffers(self.model)
 
         # attach slices onto tensor.main_grad
         for param, info in self._param_info.items():
@@ -378,13 +370,9 @@ class GradientManager(ABC):
             is_moe_param = getattr(param, "expert_model_parallel", False)
             # For moe params: only check EP duplicate; for attention params: only check TP duplicate
             if is_moe_param:
-                is_not_duplicate = (
-                    tensor_parallel.param_is_not_expert_parallel_duplicate(param)
-                )
+                is_not_duplicate = tensor_parallel.param_is_not_expert_parallel_duplicate(param)
             else:
-                is_not_duplicate = (
-                    tensor_parallel.param_is_not_tensor_parallel_duplicate(param)
-                )
+                is_not_duplicate = tensor_parallel.param_is_not_tensor_parallel_duplicate(param)
             if grad_not_none and is_not_shared and is_not_duplicate:
                 grads_for_norm.append(grad)
 

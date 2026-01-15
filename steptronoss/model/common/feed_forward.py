@@ -1,13 +1,15 @@
 from typing import Optional
 
 import torch
+from configurize import Config, Ref
 from torch.nn import functional as F
 
 from steptronoss.core import tensor_parallel
-from steptronoss.exp.base_exp import MegatronTPModelConfig
+from steptronoss.exp.base_exp import MegatronTPConfig
 
 
-class FeedForwardConfig(MegatronTPModelConfig):
+class FeedForwardConfig(Config):
+    tp_cfg: MegatronTPConfig = Ref("..tp_cfg")
 
     recompute_granularity: Optional[str]
 
@@ -52,18 +54,16 @@ class FeedForward(torch.nn.Module):
             2 * cfg.ffn_hidden_size,
             bias=False,
             gather_output=False,
-            async_tensor_model_parallel_allreduce=cfg.async_tensor_model_parallel_allreduce,
-            **self.cfg.get_tp_kwargs(),
+            async_tensor_model_parallel_allreduce=cfg.tp_cfg.async_tensor_model_parallel_allreduce,
+            **self.cfg.tp_cfg.get_tp_kwargs(),
         )
         self.w2 = tensor_parallel.RowParallelLinear(
             cfg.ffn_hidden_size,
             cfg.hidden_size,
             bias=False,
             input_is_parallel=True,
-            custom_pre_recompute_function=(
-                self.swiglu if self.swiglu_recompute_silu_out_proj else None
-            ),
-            **self.cfg.get_tp_kwargs(),
+            custom_pre_recompute_function=(self.swiglu if self.swiglu_recompute_silu_out_proj else None),
+            **self.cfg.tp_cfg.get_tp_kwargs(),
         )
         self.swiglu_recompute_silu_out_proj = cfg.swiglu_recompute_silu_out_proj
 

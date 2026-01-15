@@ -1,6 +1,7 @@
 from typing import Optional, Union
 
 import torch
+from configurize import Config, Ref
 from einops import rearrange
 
 from steptronoss.core import tensor_parallel
@@ -9,14 +10,15 @@ from steptronoss.core.context_parallel import (
     gather_from_balanced_cp_region,
 )
 from steptronoss.core.parallel_state import PM
-from steptronoss.exp.base_exp import MegatronTPModelConfig
+from steptronoss.exp.base_exp import MegatronTPConfig
 from steptronoss.model.common.attention_core import FlashAttention
 from steptronoss.model.common.rms_norm import RMSNorm
 from steptronoss.model.common.rope import YARNRoPE
 from steptronoss.utils import safediv
 
 
-class AttentionConfig(MegatronTPModelConfig):
+class AttentionConfig(Config):
+    tp_cfg: MegatronTPConfig = Ref("..tp_cfg")
     causal: bool
     attention_dropout: float
 
@@ -48,18 +50,6 @@ class AttentionConfig(MegatronTPModelConfig):
     ntk_interp_ratio: float
     max_position_embeddings: int
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # self.causal = True
-        # self.sequence_parallel = True
-        # self.attention_dropout = 0.0
-
-        # self.recompute_granularity = None
-        # self.recompute_cp_kv = False
-
-        # self.use_sliding_window = False
-        # self.num_sliding_attention_heads = 32
-
     def build_model(self, layer_id: int):
         return GroupedQueryAttention(cfg=self, layer_id=layer_id)
 
@@ -70,7 +60,7 @@ class GroupedQueryAttention(torch.nn.Module):
         self.cfg = cfg
         self.layer_id = layer_id
 
-        self.sequence_parallel = cfg.sequence_parallel
+        self.sequence_parallel = cfg.tp_cfg.sequence_parallel
 
         self.tp_size = PM.size_of("TP")
 
@@ -120,13 +110,11 @@ class GroupedQueryAttention(torch.nn.Module):
 
         self.wqkv = tensor_parallel.ColumnParallelLinear(
             cfg.hidden_size,
-            self.head_dim * self.num_heads
-            + self.head_dim * 2 * self.num_kv_heads
-            + self.wqkv_extra_dims,
+            self.head_dim * self.num_heads + self.head_dim * 2 * self.num_kv_heads + self.wqkv_extra_dims,
             bias=cfg.use_qkv_bias,
             gather_output=False,
-            async_tensor_model_parallel_allreduce=self.cfg.async_tensor_model_parallel_allreduce,
-            **cfg.get_tp_kwargs(),
+            async_tensor_model_parallel_allreduce=self.cfg.tp_cfg.async_tensor_model_parallel_allreduce,
+            **cfg.tp_cfg.get_tp_kwargs(),
         )
         self.wo = tensor_parallel.RowParallelLinear(
             self.head_dim * self.num_heads,
@@ -134,32 +122,28 @@ class GroupedQueryAttention(torch.nn.Module):
             bias=False,
             input_is_parallel=True,
             custom_pre_recompute_function=(
-                self.head_wise_attn_gate_function
-                if self.cfg.use_headwise_attn_gate
-                else None
+                self.head_wise_attn_gate_function if self.cfg.use_headwise_attn_gate else None
             ),
-            **cfg.get_tp_kwargs(),
+            **cfg.tp_cfg.get_tp_kwargs(),
         )
 
         self.core_attention = FlashAttention(
             causal=self.cfg.causal,
             attention_dropout=self.cfg.attention_dropout,
-            sliding_window=(
-                self.cfg.sliding_window_size if self.sliding_window else -1
-            ),
+            sliding_window=(self.cfg.sliding_window_size if self.sliding_window else -1),
         )
         self.use_qk_norm = not cfg.use_qk_norm
         if self.use_qk_norm:
             self.q_norm = RMSNorm(
                 self.head_dim,
                 eps=self.cfg.layernorm_epsilon,
-                sequence_parallel=self.cfg.sequence_parallel,
+                sequence_parallel=self.sequence_parallel,
                 use_zero_init=self.cfg.rms_norm_zero_gamma,
             )
             self.k_norm = RMSNorm(
                 self.head_dim,
                 eps=self.cfg.layernorm_epsilon,
-                sequence_parallel=self.cfg.sequence_parallel,
+                sequence_parallel=self.sequence_parallel,
                 use_zero_init=self.cfg.rms_norm_zero_gamma,
             )
 
@@ -190,9 +174,7 @@ class GroupedQueryAttention(torch.nn.Module):
         )
         return rope
 
-    def head_wise_attn_gate_function(
-        self, output: torch.FloatTensor, gate_weight: torch.FloatTensor
-    ):
+    def head_wise_attn_gate_function(self, output: torch.FloatTensor, gate_weight: torch.FloatTensor):
         S, B = output.shape[:2]
         attn_out = output.view(S, B, self.num_local_heads, self.head_dim)
 
@@ -204,12 +186,8 @@ class GroupedQueryAttention(torch.nn.Module):
         # xq, xk: B, S, H, C
         if self.qk_rope_head_dim != None and self.qk_rope_head_dim != self.head_dim:
             rot_dim = self.qk_rope_head_dim
-            xq_rope, xq_nope = torch.split(
-                xq, [rot_dim, xq.shape[-1] - rot_dim], dim=-1
-            )
-            xk_rope, xk_nope = torch.split(
-                xk, [rot_dim, xk.shape[-1] - rot_dim], dim=-1
-            )
+            xq_rope, xq_nope = torch.split(xq, [rot_dim, xq.shape[-1] - rot_dim], dim=-1)
+            xk_rope, xk_nope = torch.split(xk, [rot_dim, xk.shape[-1] - rot_dim], dim=-1)
             xq_rope = self.rope(xq_rope, pos_id_q)
             xk_rope = self.rope(xk_rope, pos_id_k)
             xq = torch.cat([xq_rope, xq_nope], dim=-1)
@@ -257,12 +235,8 @@ class GroupedQueryAttention(torch.nn.Module):
     ):
         # here, we need pass pos_ids, because calc it from cu_seqlens can be slow.
         if self.cp:
-            assert (
-                cu_seqlens is not None
-            ), "Context parallel (CP) attention requires cu_seqlens to be provided"
-            assert (
-                position_id is not None
-            ), "Context parallel (CP) attention requires position_id to be provided"
+            assert cu_seqlens is not None, "Context parallel (CP) attention requires cu_seqlens to be provided"
+            assert position_id is not None, "Context parallel (CP) attention requires position_id to be provided"
 
         S, B, C = x.shape  # cfg.hidden_size from x.shape
 
@@ -310,9 +284,7 @@ class GroupedQueryAttention(torch.nn.Module):
         if self.cp:
 
             # Compute balanced CP splits for this rank (left and right halves)
-            info0, info1 = cu_seqlens_to_balanced_cp(
-                cu_seqlens, cp_rank=PM.rank_in("CP"), cp_size=PM.size_of("CP")
-            )
+            info0, info1 = cu_seqlens_to_balanced_cp(cu_seqlens, cp_rank=PM.rank_in("CP"), cp_size=PM.size_of("CP"))
             # Left half
             q_range0, q_cumlen0, max_q0, k_range0, k_cumlen0, max_k0 = info0
             # Right half
@@ -332,9 +304,7 @@ class GroupedQueryAttention(torch.nn.Module):
             xq0, xq1 = xq.chunk(2, 0)
 
             # Half 0
-            xq0, xk0, xv0 = [
-                rearrange(i, "s b h d -> b s h d") for i in [xq0, xk0, xv0]
-            ]
+            xq0, xk0, xv0 = [rearrange(i, "s b h d -> b s h d") for i in [xq0, xk0, xv0]]
             xq0, xk0 = self.forward_rope(
                 xq0,
                 xk0,
@@ -350,9 +320,7 @@ class GroupedQueryAttention(torch.nn.Module):
             )
 
             # Half 1
-            xq1, xk1, xv1 = [
-                rearrange(i, "s b h d -> b s h d") for i in [xq1, xk1, xv1]
-            ]
+            xq1, xk1, xv1 = [rearrange(i, "s b h d -> b s h d") for i in [xq1, xk1, xv1]]
             xq1, xk1 = self.forward_rope(
                 xq1,
                 xk1,
@@ -372,9 +340,7 @@ class GroupedQueryAttention(torch.nn.Module):
             # Non-CP path via shared _forward
             xq, xk, xv = [rearrange(i, "s b h d -> b s h d") for i in [xq, xk, xv]]
 
-            xq, xk = self.forward_rope(
-                xq, xk, pos_id_q=position_id, pos_id_k=position_id
-            )
+            xq, xk = self.forward_rope(xq, xk, pos_id_q=position_id, pos_id_k=position_id)
             output = self.forward_attention_core(
                 xq,
                 xk,

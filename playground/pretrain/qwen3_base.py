@@ -1,16 +1,15 @@
 import torch
 
-from steptronoss.model.decoder_model import (
-    DecoderLLMConfig,
-)
+from steptronoss.exp.base_exp import BaseExp, ParallelConfig
 from steptronoss.model.common.feed_forward import FeedForwardConfig
 from steptronoss.model.common.grouped_query_attention import AttentionConfig
 from steptronoss.model.common.parallel_embedding import (
     InputEmbeddingConfig,
     OutputEmbeddingConfig,
-    OutputEmbedding,
 )
-from steptronoss.exp.base_exp import ParallelConfig, BaseExp
+from steptronoss.model.decoder_model import (
+    DecoderLLMConfig,
+)
 
 
 class Qwen3AttentionConfig(AttentionConfig):
@@ -131,16 +130,22 @@ class Qwen3_1p7BConfig(DecoderLLMConfig):
         self.layernorm_epsilon = 1e-6
         self.rms_norm_zero_gamma = False
         self.recompute_full = False
+        self.tie_embedding = True
 
         # Precision
         self.params_dtype = torch.bfloat16
 
         # Other settings
-        self.sequence_parallel = False
         self.variable_seq_lengths = True
+
+    def build_model(self):
+        from steptronoss.model.qwen_dense import QwenModel
+
+        return QwenModel(cfg=self, layer_map=self.build_layermap())
 
 
 from steptronoss.exp.base_exp import GradientManagerConfig, TrainerConfig
+
 
 class Exp(BaseExp):
     model_cfg = Qwen3_1p7BConfig
@@ -153,20 +158,22 @@ class Exp(BaseExp):
         self.grad_manager_cfg.optimizer_cfg.weight_decay = 0.9
         self.grad_manager_cfg.clip_grad = 0.0
 
-        self.grad_manager_cfg.use_distributed_optimizer = False
+        self.grad_manager_cfg.use_distributed_optimizer = True
         self.grad_manager_cfg.params_dtype = torch.bfloat16
+        self.model_cfg.overlap_p2p_comm = True
 
-    
 
 # import sys, time
 # sys.excepthook = lambda a,b,c:time.sleep(3600)
 
 if __name__ == "__main__":
-    from steptronoss.core.parallel_state import PM
+    from steptronoss.core.parallel_state import PM, get_vpp_size, set_vpp_rank
     from steptronoss.initialize import set_mpu_random_seed
+    from steptronoss.utils import print_n_params, profile_allreduce
     from steptronoss.utils.logger import setup_logger
+    from steptronoss.utils.weight_loader import HFWeights
 
-    logger = setup_logger('./tensorboard_dir/')
+    logger = setup_logger("./tensorboard_dir/")
     exp = Exp()
     logger.info(exp)
 
@@ -174,26 +181,45 @@ if __name__ == "__main__":
     PM.set_mesh(exp.model_cfg.parallel_cfg)
     set_mpu_random_seed(1234)
 
-    model = exp.model_cfg.build_model()
-    for p in model.parameters():
-        from torch.nn.init import trunc_normal_
-        trunc_normal_(p, mean=0.0, std=1.0)
-    # from steptron import debug;debug()
-    from steptronoss.model.module import Float16Module
+    models = []
+    for i in range(get_vpp_size()):
+        set_vpp_rank(i)
+        model = exp.model_cfg.build_model()
+        model.load_hf_state_dict(
+            HFWeights("/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-1.7B-Base/"), strict=False
+        )
+        # from steptron import debug;debug()
+        from steptronoss.model.module import Float16Module
 
-    model = Float16Module(model, dtype=exp.model_cfg.params_dtype).cuda()
-    gm = exp.grad_manager_cfg.build_gradient_manager(model)
+        model = Float16Module(model, dtype=exp.model_cfg.params_dtype).cuda()
+        models.append(model)
+    print_n_params(models)
 
-
+    gms = [exp.grad_manager_cfg.build_gradient_manager(model) for model in models]
 
     x = torch.arange(1024, dtype=torch.long, device="cuda").reshape(1, -1)
-    cu_seqlens = torch.tensor([0, 1024], dtype=torch.int32, device='cuda')
+    cu_seqlens = torch.tensor([0, 1024], dtype=torch.int32, device="cuda")
+    data = dict(input_ids=x, cu_seqlens=cu_seqlens)
 
-    out = model(input_ids=x, cu_seqlens=cu_seqlens)
-    loss = out.sum()
-    loss.backward()
-    
-    success, grad_norm, grad_zeros = gm.step()
-    gm.zero_grad()
-    logger.warning(out.shape)
-    logger.warning(model.module.tok_embeddings.word_embeddings.weight)
+    profile_allreduce()
+
+    pp_scheduler = exp.model_cfg.get_pp_scheduler()
+    pp_scheduler.configure(
+        models=models,
+        data_iterators=[iter([data] * 100)] * get_vpp_size(),
+        data_sync_fn=exp.trainer_cfg.sync_get_data,
+        loss_fn=lambda data, logits: logits.sum(),
+        data_proc_fn=lambda x: x,
+        training=True,
+        collect_output=False,
+    )
+
+    out = pp_scheduler.run(forward_num=16)
+    if PM.i_am("PP", 0):
+        logger.warning(models[0].module.tok_embeddings.word_embeddings.weight)
+
+    for gm in gms:
+        success, grad_norm, grad_zeros = gm.step()
+        gm.zero_grad()
+    if PM.i_am("PP", 0):
+        logger.warning(models[0].module.tok_embeddings.word_embeddings.weight)

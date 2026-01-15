@@ -13,15 +13,13 @@ from loguru import logger
 from tabulate import tabulate
 from torch.nn.parallel import DistributedDataParallel as torchDDP
 
-from steptronoss.core.parallel_state import PM, get_virtual_pipeline_model_parallel_rank
+from steptronoss.core.parallel_state import PM, get_vpp_rank
 from steptronoss.model.module import MegatronModule, ModelWrapperBase
 
 from .general import convert_num
 
 
-def unwrap_model(
-    model, module_instances=(torchDDP, ModelWrapperBase)
-) -> MegatronModule:
+def unwrap_model(model, module_instances=(torchDDP, ModelWrapperBase)) -> MegatronModule:
     return_list = True
     if not isinstance(model, list):
         model = [model]
@@ -72,9 +70,7 @@ def calc_params_l2_norm(model, is_bf16=False):
     )
     norm_2 = norm * norm
     # Sum across all model-parallel GPUs.
-    torch.distributed.all_reduce(
-        norm_2, op=torch.distributed.ReduceOp.SUM, group=PM.group_of("MP")
-    )
+    torch.distributed.all_reduce(norm_2, op=torch.distributed.ReduceOp.SUM, group=PM.group_of("MP"))
     return norm_2.item() ** 0.5
 
 
@@ -101,11 +97,7 @@ def force_clear_mem():
     for obj in gc.get_objects():
         try:
             if torch.is_tensor(obj):
-                if (
-                    hasattr(obj, "data")
-                    and torch.is_tensor(obj.data)
-                    and obj.data.is_cuda
-                ):
+                if hasattr(obj, "data") and torch.is_tensor(obj.data) and obj.data.is_cuda:
                     obj.data = obj.data.to("cpu")
         except:
             pass
@@ -168,9 +160,7 @@ def print_n_params(model: list[torch.nn.Module]):
 
     all_tp_params = [None for i in range(tp_size)]
 
-    torch.distributed.all_gather_object(
-        all_tp_params, local_raw_numel, group=PM.group_of("TP")
-    )
+    torch.distributed.all_gather_object(all_tp_params, local_raw_numel, group=PM.group_of("TP"))
 
     if PM.rank_in("DP") == 0 and PM.rank_in("TP") == 0:
         all_tp_params = [convert_num(all_tp_params[i]) for i in range(tp_size)]
@@ -210,9 +200,7 @@ def print_n_params(model: list[torch.nn.Module]):
         logger.info(f"total params: {convert_num(total_nums[0].item())}")
         logger.info(f"total expert params: {convert_num(total_nums[1].item())}")
         logger.info(f"total non-expert params: {convert_num(total_nums[2].item())}")
-        logger.info(
-            f"total tensor-parallel params: {convert_num(total_nums[3].item())}"
-        )
+        logger.info(f"total tensor-parallel params: {convert_num(total_nums[3].item())}")
 
 
 def print_layer_map(layer_map):
@@ -377,8 +365,7 @@ def profile_allreduce():
         stats_mean = ", ".join([f"{i[0]:.2f}" for i in stats])
         stats_min = ", ".join([f"{i[1]:.2f}" for i in stats])
         logger.info(
-            f"Group allreduce [{g_name}] (10 tries):"
-            f"\n>> Avg [{stats_mean}] GB/s\n>> Min [{stats_min}] GB/s",
+            f"Group allreduce [{g_name}] (10 tries):" f"\n>> Avg [{stats_mean}] GB/s\n>> Min [{stats_min}] GB/s",
             at=0,
         )
 
@@ -401,7 +388,7 @@ def check_nan(tensors, input_tensor):
             logger.warning(
                 f"NaN detected [{N_nan}/{N_total}] on TP={PM.rank_in('TP')}/"
                 f"PP={PM.rank_in('PP')}/"
-                f"VP={get_virtual_pipeline_model_parallel_rank()}"
+                f"VP={get_vpp_rank()}"
             )
 
 

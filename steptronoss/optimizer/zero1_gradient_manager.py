@@ -7,7 +7,7 @@ import torch
 
 from steptronoss.core import tensor_parallel
 from steptronoss.core.parallel_state import PM
-from steptronoss.model.comm_buffer import (
+from steptronoss.model.utils.comm_buffer import (
     ParamInfo,
     SteptronParameter,
 )
@@ -30,8 +30,8 @@ class Zero1GradientManager(GradientManager):
         super().__init__(cfg, model, optimizer)
         self.model_comm_group = None  # None for world
 
-        (self.fp32_params, self.fp16_params, self.fp16_params_in_fp32) = (
-            self.replace_optimizer_with_fp32_shards(self.optimizer, self._param_info)
+        (self.fp32_params, self.fp16_params, self.fp16_params_in_fp32) = self.replace_optimizer_with_fp32_shards(
+            self.optimizer, self._param_info
         )
 
     def zero_grad(self, set_to_none=True, **kwargs):
@@ -72,9 +72,7 @@ class Zero1GradientManager(GradientManager):
                 grad_norm = self.clip_grad_norm(self.cfg.clip_grad)
         # Count the zeros in the grads.
         with get_timers().record("optimizer-count-zeros", log_level=2):
-            num_zeros_in_grad = (
-                self.count_zeros() if self.cfg.log_num_zeros_in_grad else None
-            )
+            num_zeros_in_grad = self.count_zeros() if self.cfg.log_num_zeros_in_grad else None
 
         # Step the optimizer.
         with get_timers().record("optimizer-inner-step", log_level=2):
@@ -91,9 +89,7 @@ class Zero1GradientManager(GradientManager):
     def replace_optimizer_with_fp32_shards(
         optimizer: torch.optim.Optimizer,
         param_info: dict[torch.Tensor, ParamInfo],
-    ) -> tuple[
-        list[SteptronParameter], list[SteptronParameter], list[SteptronParameter]
-    ]:
+    ) -> tuple[list[SteptronParameter], list[SteptronParameter], list[SteptronParameter]]:
         fp32_params: list[SteptronParameter] = []
         fp16_params: list[SteptronParameter] = []
         fp16_params_in_fp32: list[SteptronParameter] = []
@@ -109,9 +105,7 @@ class Zero1GradientManager(GradientManager):
                     if param.is_cuda and param.dtype == torch.bfloat16:
                         # Create a copy
                         main_param = param.detach().clone().float()
-                        tensor_parallel.copy_tensor_model_parallel_attributes(
-                            main_param, param
-                        )
+                        tensor_parallel.copy_tensor_model_parallel_attributes(main_param, param)
                         fp16_params.append(param)
                         fp16_params_in_fp32.append(main_param)
 
@@ -193,9 +187,7 @@ class Zero1GradientManager(GradientManager):
 
                 torch.distributed.all_gather_into_tensor(
                     output_tensor=buffer,
-                    input_tensor=buffer[
-                        rank * local_size : rank * local_size + local_size
-                    ],
+                    input_tensor=buffer[rank * local_size : rank * local_size + local_size],
                     group=group,
                 )
 

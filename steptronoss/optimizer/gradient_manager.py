@@ -7,8 +7,8 @@ import torch
 from steptronoss.core import tensor_parallel
 from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import GradientManagerConfig
-from steptronoss.model.comm_buffer import SteptronParameter
 from steptronoss.model.module import MegatronModule
+from steptronoss.model.utils.comm_buffer import SteptronParameter
 from steptronoss.timers import get_timers
 
 from .base_gradient_manager import GradientManager, _zero_grad_group_helper
@@ -25,8 +25,8 @@ class AccInFP32GradientManager(GradientManager):
         super().__init__(cfg, model, optimizer)
         self.model_comm_group = PM.group_of("MP")
 
-        (self.fp32_params, self.fp16_params, self.fp16_params_in_fp32) = (
-            self.replace_optimizer_with_fp32(self.optimizer)
+        (self.fp32_params, self.fp16_params, self.fp16_params_in_fp32) = self.replace_optimizer_with_fp32(
+            self.optimizer
         )
 
     def zero_grad(self, set_to_none=True, **kwargs):
@@ -67,9 +67,7 @@ class AccInFP32GradientManager(GradientManager):
                 grad_norm = self.clip_grad_norm(self.cfg.clip_grad)
         # Count the zeros in the grads.
         with get_timers().record("optimizer-count-zeros", log_level=2):
-            num_zeros_in_grad = (
-                self.count_zeros() if self.cfg.log_num_zeros_in_grad else None
-            )
+            num_zeros_in_grad = self.count_zeros() if self.cfg.log_num_zeros_in_grad else None
 
         # Step the optimizer.
         with get_timers().record("optimizer-inner-step", log_level=2):
@@ -89,9 +87,7 @@ class AccInFP32GradientManager(GradientManager):
     @staticmethod
     def replace_optimizer_with_fp32(
         optimizer: torch.optim.Optimizer,
-    ) -> tuple[
-        list[SteptronParameter], list[SteptronParameter], list[SteptronParameter]
-    ]:
+    ) -> tuple[list[SteptronParameter], list[SteptronParameter], list[SteptronParameter]]:
         fp32_params: list[SteptronParameter] = []
         fp16_params: list[SteptronParameter] = []
         fp16_params_in_fp32: list[SteptronParameter] = []
@@ -106,9 +102,7 @@ class AccInFP32GradientManager(GradientManager):
                     if param.is_cuda and param.dtype == torch.bfloat16:
                         # Create a copy
                         main_param = param.detach().clone().float()
-                        tensor_parallel.copy_tensor_model_parallel_attributes(
-                            main_param, param
-                        )
+                        tensor_parallel.copy_tensor_model_parallel_attributes(main_param, param)
                         fp16_params.append(param)
                         fp16_params_in_fp32.append(main_param)
 

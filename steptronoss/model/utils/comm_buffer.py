@@ -126,9 +126,7 @@ def build_grad_buffers(
 
         param_ids = list(range(len(params)))
         param_sizes = [p.numel() for p in params]
-        splited_params_ids = balanced_list_split(
-            param_ids, sizes=param_sizes, split=dp_size
-        )
+        splited_params_ids = balanced_list_split(param_ids, sizes=param_sizes, split=dp_size)
         splited_sizes = [sum(param_sizes[x] for x in ids) for ids in splited_params_ids]
         max_split_size = max(splited_sizes)
 

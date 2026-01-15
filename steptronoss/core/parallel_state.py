@@ -97,29 +97,20 @@ class ParallelManager:
         assert len(dst_comp) == 2, "Destination must be 2 dimensional!"
 
         def _flatten(comp):
-            return (
-                sum([_flatten(i) for i in comp], [])
-                if isinstance(comp, list)
-                else [comp]
-            )
+            return sum([_flatten(i) for i in comp], []) if isinstance(comp, list) else [comp]
 
-        src_div = reduce(
-            lambda a, b: a * b, [kwargs.get(k, 1) for k in _flatten(src_comp)], 1
-        )
+        src_div = reduce(lambda a, b: a * b, [kwargs.get(k, 1) for k in _flatten(src_comp)], 1)
 
         world_size = self.world_size
 
         world_size = (world_size // src_div) * src_div
 
         assert world_size, (
-            f"Cannot define '{pattern}' with {kwargs}! "
-            f"At least {src_div} ranks required, got {self.world_size}"
+            f"Cannot define '{pattern}' with {kwargs}! " f"At least {src_div} ranks required, got {self.world_size}"
         )
         kwargs = {k: v for k, v in kwargs.items() if k in _flatten(src_comp)}
 
-        ranks = rearrange(
-            torch.arange(world_size), f"{src} -> {dst}", **kwargs
-        ).tolist()
+        ranks = rearrange(torch.arange(world_size), f"{src} -> {dst}", **kwargs).tolist()
         if world_size != self.world_size:
             ranks.append(torch.arange(world_size, self.world_size).tolist())
 
@@ -161,9 +152,7 @@ class ParallelManager:
 
         # Vritual Parallels
         if hasattr(parallel_cfg, "virtual_pipeline_model_parallel_size"):
-            set_virtual_pipeline_model_parallel_world_size(
-                parallel_cfg.virtual_pipeline_model_parallel_size
-            )
+            set_vpp_size(parallel_cfg.virtual_pipeline_model_parallel_size)
         return self.parallels
 
     @contextmanager
@@ -230,7 +219,7 @@ def model_parallel_is_initialized():
     return "TP" in PM.parallels and "PP" in PM.parallels and "DP" in PM.parallels
 
 
-def set_virtual_pipeline_model_parallel_world_size(world_size):
+def set_vpp_size(world_size):
     """Set the pipeline model parallel size"""
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
     _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = world_size
@@ -242,7 +231,7 @@ def get_pipeline_model_parallel_world_size(ignore_virtual=True):
     if ignore_virtual:
         return pp_size
     else:
-        vp_size = get_virtual_pipeline_model_parallel_world_size() or 1
+        vp_size = get_vpp_size() or 1
         return vp_size * pp_size
 
 
@@ -252,7 +241,7 @@ def get_pipeline_model_parallel_rank(ignore_virtual=True):
     if ignore_virtual:
         return rank
     else:
-        vp_rank = get_virtual_pipeline_model_parallel_rank() or 0
+        vp_rank = get_vpp_rank() or 0
         return vp_rank * get_pipeline_model_parallel_world_size() + rank
 
 
@@ -271,10 +260,7 @@ def get_pipeline_model_parallel_prev_rank():
 def is_pipeline_first_stage(ignore_virtual=False):
     """Return True if in the first pipeline model-parallel stage, False otherwise."""
     if not ignore_virtual:
-        if (
-            get_virtual_pipeline_model_parallel_world_size() is not None
-            and get_virtual_pipeline_model_parallel_rank() != 0
-        ):
+        if get_vpp_size() is not None and get_vpp_rank() != 0:
             return False
     return get_pipeline_model_parallel_rank() == 0
 
@@ -282,18 +268,12 @@ def is_pipeline_first_stage(ignore_virtual=False):
 def is_pipeline_last_stage(ignore_virtual=False):
     """Return True if in the last pipeline model-parallel stage, False otherwise."""
     if not ignore_virtual:
-        virtual_pipeline_model_parallel_world_size = (
-            get_virtual_pipeline_model_parallel_world_size()
-        )
-        if (
-            virtual_pipeline_model_parallel_world_size is not None
-            and get_virtual_pipeline_model_parallel_rank()
-            != (virtual_pipeline_model_parallel_world_size - 1)
+        virtual_pipeline_model_parallel_world_size = get_vpp_size()
+        if virtual_pipeline_model_parallel_world_size is not None and get_vpp_rank() != (
+            virtual_pipeline_model_parallel_world_size - 1
         ):
             return False
-    return get_pipeline_model_parallel_rank() == (
-        get_pipeline_model_parallel_world_size() - 1
-    )
+    return get_pipeline_model_parallel_rank() == (get_pipeline_model_parallel_world_size() - 1)
 
 
 # def get_tp_info_for_param(param):
@@ -318,25 +298,25 @@ def is_pipeline_last_stage(ignore_virtual=False):
 #         )
 
 
-def get_virtual_pipeline_model_parallel_rank():
+def get_vpp_rank():
     """Return the virtual pipeline-parallel rank."""
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
     return _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
 
 
-def set_virtual_pipeline_model_parallel_rank(rank):
+def set_vpp_rank(rank):
     """Set the virtual pipeline-parallel rank."""
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
     _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK = rank
 
 
-def get_virtual_pipeline_model_parallel_world_size():
+def get_vpp_size():
     """Return the virtual pipeline-parallel world size."""
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
     return _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
 
 
-def set_virtual_pipeline_model_parallel_world_size(world_size):
+def set_vpp_size(world_size):
     """Set the virtual pipeline-parallel world size"""
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
     _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = world_size
