@@ -92,26 +92,21 @@ class ParallelConfig(Config):
     tensor_model_parallel_size = 8
 
     def build_parallel(self) -> dict[str, list[list[int]]]:
-        from steptron.core.parallel_state import PM
+        from steptronoss.core.parallel_state import PM
 
         args = {
             "p": self.pipeline_model_parallel_size,
             "t": self.tensor_model_parallel_size,
         }
 
-        parallel_groups = {
-            k: PM.define_parallel(v, **args)
-            for k, v in self.parallel_definition.items()
-        }
+        parallel_groups = {k: PM.define_parallel(v, **args) for k, v in self.parallel_definition.items()}
 
         return parallel_groups
 
 
 class DataConfig(Config):
 
-    def build_dataloader(
-        self, dp_rank: int = 0, dp_size: int = 1
-    ) -> Iterable[_DataSample]:
+    def build_dataloader(self, dp_rank: int = 0, dp_size: int = 1) -> Iterable[_DataSample]:
         """Build a Nextable that returns a dict when call next(dataloader)."""
         pass
 
@@ -175,8 +170,9 @@ class BaseExp(Config):
 
     def update_from_args(self):
         from loguru import logger
-        from steptron.utils.arguments import parse_args
-        from steptron.utils.logger import setup_logger
+
+        from steptronoss.utils.arguments import parse_args
+        from steptronoss.utils.logger import setup_logger
 
         # apply and log diffs from arguments
         args = parse_args()

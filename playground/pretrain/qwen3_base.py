@@ -1,4 +1,5 @@
 import torch
+from configurize import Ref
 
 from steptronoss.exp.base_exp import BaseExp, ParallelConfig
 from steptronoss.model.common.feed_forward import FeedForwardConfig
@@ -144,7 +145,75 @@ class Qwen3_1p7BConfig(DecoderLLMConfig):
         return QwenModel(cfg=self, layer_map=self.build_layermap())
 
 
+from playground.data.sft.reasoning_GCMKSTIDF_sft_stage1_1203_compile_qwen import (
+    DatasetsConfig,
+)
 from steptronoss.exp.base_exp import GradientManagerConfig, TrainerConfig
+from steptronoss.exp.sft import SFTDataConfig
+
+
+class Qwen3_SFT_DataConfig(SFTDataConfig):
+    dataset_cfg = DatasetsConfig
+
+    max_packing_seqlen = Ref("..trainer_cfg.global_seq_length", 128000)
+
+    seqlen_divisible_by: int = 64
+
+    def build_dataloader(self, dp_rank=0, dp_size=1):
+        from steptronoss.data.dataloader.packed_dataloader import MixedPackedDataloader
+        from steptronoss.data.nextable import DPMux, async_accelearte_slowfast
+
+        datasets = self.dataset_cfg.build_datasets()
+        dataloader = MixedPackedDataloader(
+            datasets=[ds[0] for ds in datasets.values()],
+            epochs=[ds[1] for ds in datasets.values()],
+            max_length=self.max_packing_seqlen,
+            oversize_policy="drop",
+            transform=self.pack,
+        )
+        dataloader = DPMux(dataloader, dp_size=dp_size, dp_rank=dp_rank)
+
+        dataloader = async_accelearte_slowfast(dataloader)  # optional, remove for debug
+        return dataloader
+
+    def pack(self, pieces: list):
+        import numpy as np
+
+        size = sum([len(s["tokens"]) - 1 for s in pieces])
+
+        if size % self.seqlen_divisible_by != 0:
+            # padding to the tensor_model_parallel_size
+            padding_size = self.seqlen_divisible_by - size % self.seqlen_divisible_by
+
+            padding_tensor = np.zeros(padding_size + 1)
+            pieces.append(
+                {
+                    "tokens": padding_tensor,
+                    "loss_mask": padding_tensor,
+                }
+            )
+
+        sizes = torch.tensor([len(s["tokens"]) - 1 for s in pieces])
+        from torch import tensor as T
+
+        tokens = torch.cat([T(s["tokens"][:-1], dtype=torch.long) for s in pieces])
+        labels = torch.cat([T(s["tokens"][1:], dtype=torch.long) for s in pieces])
+        loss_mask = torch.cat([T(s["loss_mask"][1:], dtype=torch.float32) for s in pieces])
+
+        cu_seqlens = torch.cat(
+            [
+                torch.zeros(1),
+                torch.cumsum(sizes, 0),
+            ]
+        ).int()
+
+        return dict(
+            tokens=tokens,
+            labels=labels,
+            loss_mask=loss_mask,
+            cu_seqlens=cu_seqlens,
+            max_seq_len=sizes.max(),
+        )
 
 
 class Exp(BaseExp):
@@ -186,7 +255,8 @@ if __name__ == "__main__":
         set_vpp_rank(i)
         model = exp.model_cfg.build_model()
         model.load_hf_state_dict(
-            HFWeights("/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-1.7B-Base/"), strict=False
+            HFWeights("/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-1.7B-Base/"),
+            strict=False,
         )
         # from steptron import debug;debug()
         from steptronoss.model.module import Float16Module
