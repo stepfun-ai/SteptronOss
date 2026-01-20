@@ -200,12 +200,10 @@ class Zero1GradientManager(GradientManager):
         for fp16_param, fp32_param in zip(self.fp16_params, self.fp16_params_in_fp32):
             fp32_param.grad = fp16_param.main_grad.float()
             fp16_param.grad = None
-            fp16_param.main_grad = None
 
         # For fp32 grads, we need to reset the grads to main grad.
         for param in self.fp32_params:
             param.grad = param.main_grad
-            param.main_grad = None
 
     def _copy_fp32_params_to_model_params(self) -> None:
         # Only needed for the float16 params.

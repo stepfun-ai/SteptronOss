@@ -3,12 +3,12 @@
 from typing import Callable, Optional, Sequence, Tuple, Union
 
 import torch
-from steptron.timers import get_timers
 from torch import distributed as dist
 
 from steptronoss.core import parallel_state as mpu
 from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import MegatronPPModelConfig
+from steptronoss.timers import get_timers
 
 
 def _communicate_shapes(

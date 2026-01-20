@@ -7,6 +7,7 @@ import contextlib
 import os
 
 import torch
+from loguru import logger
 from torch import _C
 from torch.cuda import _lazy_call
 from torch.cuda import device as device_ctx_manager
@@ -118,13 +119,11 @@ class CudaRNGStatesTracker:
         # Set rng state to the desired one
         _set_cuda_rng_state(self.states_[name])
         # Do the stuff we wanted to do.
-        try:
-            yield
-        finally:
-            # Update the current rng state for later use.
-            self.states_[name] = torch.cuda.get_rng_state()
-            # And set the state to the original state we started with.
-            _set_cuda_rng_state(orig_cuda_rng_state)
+        yield
+        # Update the current rng state for later use.
+        self.states_[name] = torch.cuda.get_rng_state()
+        # And set the state to the original state we started with.
+        _set_cuda_rng_state(orig_cuda_rng_state)
 
 
 # RNG tracker object.
@@ -150,9 +149,7 @@ class CheckpointFunction(torch.autograd.Function):
         ctx.distribute_saved_activations = distribute_saved_activations
 
         # Copy the rng states.
-        ctx.fwd_cpu_rng_state = torch.get_rng_state()
-        ctx.fwd_cuda_rng_state = torch.cuda.get_rng_state()
-        ctx.fwd_cuda_rng_state_tracker = get_cuda_rng_tracker().get_states()
+        ctx.rng_states = _get_all_rng_states()
         ctx.kwargs = kwargs
 
         with torch.no_grad():
@@ -175,10 +172,7 @@ class CheckpointFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *args):
         if not torch.autograd._is_checkpoint_valid():
-            raise RuntimeError(
-                "Checkpointing is not compatible with .grad(), "
-                "please use .backward() if possible"
-            )
+            raise RuntimeError("Checkpointing is not compatible with .grad(), " "please use .backward() if possible")
         inputs = ctx.saved_tensors
         if ctx.distribute_saved_activations:
             safely_set_viewless_tensor_data(
@@ -186,38 +180,21 @@ class CheckpointFunction(torch.autograd.Function):
                 gather_split_1d_tensor(inputs[0].data).view(ctx.input_0_shape),
             )
 
-        # Store the current states.
-        bwd_cpu_rng_state = torch.get_rng_state()
-        bwd_cuda_rng_state = torch.cuda.get_rng_state()
-        bwd_cuda_rng_state_tracker = get_cuda_rng_tracker().get_states()
+        with _fork_rng():
+            # Set the states to what it used to be before the forward pass.
+            _set_all_rng_states(*ctx.rng_states)
 
-        # Set the states to what it used to be before the forward pass.
-        torch.set_rng_state(ctx.fwd_cpu_rng_state)
-        _set_cuda_rng_state(ctx.fwd_cuda_rng_state)
-        get_cuda_rng_tracker().set_states(ctx.fwd_cuda_rng_state_tracker)
-
-        # Compute the forward pass.
-        detached_inputs = detach_variable(inputs)
-        with torch.enable_grad():
-            outputs = ctx.run_function(*detached_inputs, **ctx.kwargs)
-        del ctx.kwargs
-
-        # Set the states back to what it was at the start of this function.
-        torch.set_rng_state(bwd_cpu_rng_state)
-        _set_cuda_rng_state(bwd_cuda_rng_state)
-        get_cuda_rng_tracker().set_states(bwd_cuda_rng_state_tracker)
+            # Compute the forward pass.
+            detached_inputs = detach_variable(inputs)
+            with torch.enable_grad():
+                outputs = ctx.run_function(*detached_inputs, **ctx.kwargs)
+            del ctx.kwargs
 
         if isinstance(outputs, torch.Tensor):
             outputs = (outputs,)
         torch.autograd.backward(outputs, args)
-        grads = tuple(
-            inp.grad if isinstance(inp, torch.Tensor) else inp
-            for inp in detached_inputs
-        )
+        grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp for inp in detached_inputs)
         return (None, None, None) + grads
-
-
-from loguru import logger
 
 
 class CheckpointFunctionWithSanityCheck(torch.autograd.Function):
@@ -234,9 +211,7 @@ class CheckpointFunctionWithSanityCheck(torch.autograd.Function):
         ctx.distribute_saved_activations = distribute_saved_activations
 
         # Copy the rng states.
-        ctx.fwd_cpu_rng_state = torch.get_rng_state()
-        ctx.fwd_cuda_rng_state = torch.cuda.get_rng_state()
-        ctx.fwd_cuda_rng_state_tracker = get_cuda_rng_tracker().get_states()
+        ctx.fwd_rng_state = _get_all_rng_states()
         ctx.kwargs = kwargs
 
         with torch.no_grad():
@@ -264,10 +239,7 @@ class CheckpointFunctionWithSanityCheck(torch.autograd.Function):
     @staticmethod
     def backward(ctx, *args):
         if not torch.autograd._is_checkpoint_valid():
-            raise RuntimeError(
-                "Checkpointing is not compatible with .grad(), "
-                "please use .backward() if possible"
-            )
+            raise RuntimeError("Checkpointing is not compatible with .grad(), " "please use .backward() if possible")
         # fwd_outputs, *inputs = ctx.saved_tensors
         saved = ctx.saved_tensors
         fwd_outputs, inputs = saved[0], saved[1:]
@@ -279,39 +251,25 @@ class CheckpointFunctionWithSanityCheck(torch.autograd.Function):
             )
 
         # Store the current states.
-        bwd_cpu_rng_state = torch.get_rng_state()
-        bwd_cuda_rng_state = torch.cuda.get_rng_state()
-        bwd_cuda_rng_state_tracker = get_cuda_rng_tracker().get_states()
+        with _fork_rng():
 
-        # Set the states to what it used to be before the forward pass.
-        torch.set_rng_state(ctx.fwd_cpu_rng_state)
-        _set_cuda_rng_state(ctx.fwd_cuda_rng_state)
-        get_cuda_rng_tracker().set_states(ctx.fwd_cuda_rng_state_tracker)
+            # Set the states to what it used to be before the forward pass.
+            _set_all_rng_states(ctx.fwd_rng_state)
 
-        # Compute the forward pass.
-        detached_inputs = detach_variable(inputs)
-        with torch.enable_grad():
-            outputs = ctx.run_function(*detached_inputs, **ctx.kwargs)
-        del ctx.kwargs
+            # Compute the forward pass.
+            detached_inputs = detach_variable(inputs)
+            with torch.enable_grad():
+                outputs = ctx.run_function(*detached_inputs, **ctx.kwargs)
+            del ctx.kwargs
 
-        if not torch.allclose(fwd_outputs, outputs, atol=1e-6):
-            maxdiff = (fwd_outputs - outputs).abs().max()
-            logger.warning(
-                f"Checkpoint function with sanity check failed, diff: {maxdiff}"
-            )
-
-        # Set the states back to what it was at the start of this function.
-        torch.set_rng_state(bwd_cpu_rng_state)
-        _set_cuda_rng_state(bwd_cuda_rng_state)
-        get_cuda_rng_tracker().set_states(bwd_cuda_rng_state_tracker)
+            if not torch.allclose(fwd_outputs, outputs, atol=1e-6):
+                maxdiff = (fwd_outputs - outputs).abs().max()
+                logger.warning(f"Checkpoint function with sanity check failed, diff: {maxdiff}")
 
         if isinstance(outputs, torch.Tensor):
             outputs = (outputs,)
         torch.autograd.backward(outputs, args)
-        grads = tuple(
-            inp.grad if isinstance(inp, torch.Tensor) else inp
-            for inp in detached_inputs
-        )
+        grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp for inp in detached_inputs)
         return (None, None, None) + grads
 
 
@@ -320,17 +278,11 @@ def checkpoint(function, distribute_saved_activations, *args, **kwargs):
     This has been directly copied from torch.utils.checkpoint."""
     for v in kwargs.values():
         if isinstance(v, torch.Tensor) and v.requires_grad:
-            raise RuntimeError(
-                f"Do not use keyword args for tensors that requires_grad!"
-            )
+            raise RuntimeError(f"Do not use keyword args for tensors that requires_grad!")
 
     if os.environ.get("RECOMPUTE_SANITY_CHECK", "0") == "1":
-        return CheckpointFunctionWithSanityCheck.apply(
-            function, distribute_saved_activations, kwargs, *args
-        )
-    return CheckpointFunction.apply(
-        function, distribute_saved_activations, kwargs, *args
-    )
+        return CheckpointFunctionWithSanityCheck.apply(function, distribute_saved_activations, kwargs, *args)
+    return CheckpointFunction.apply(function, distribute_saved_activations, kwargs, *args)
 
 
 def _get_all_rng_states():
@@ -375,9 +327,7 @@ class CheckpointWithoutOutputFunction(torch.autograd.Function):
         outputs = ctx.outputs
         torch.autograd.backward(outputs, args)
         ctx.outputs = None
-        grads = tuple(
-            inp.grad if isinstance(inp, torch.Tensor) else inp for inp in inputs
-        )
+        grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp for inp in inputs)
         return (None, None) + grads
 
 
@@ -399,9 +349,7 @@ class CheckpointWithoutOutput:
 
     def _recompute(self, grad):
         if not torch.autograd._is_checkpoint_valid():
-            raise RuntimeError(
-                "Checkpointing is not compatible with .grad(), please use .backward() if possible"
-            )
+            raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
 
         with _fork_rng():
             _set_all_rng_states(*self.rng_states)
@@ -413,6 +361,7 @@ class CheckpointWithoutOutput:
         if isinstance(outputs, torch.Tensor):
             outputs = (outputs,)
 
+        # restore the recomputed memory without changing the metadata
         with torch.no_grad():
             for output, recomputed in zip(self.outputs, outputs):
                 output_size = recomputed.untyped_storage().size()

@@ -21,7 +21,7 @@ from steptronoss.exp.abstract import TokenizerConfig as AbstractTokenizerConfig
 from steptronoss.exp.abstract import TrainerConfig as AbstractTrainerConfig
 
 if TYPE_CHECKING:
-    from steptron.core.pipeline_parallel.schedules import FWBWScheduler
+    from steptronoss.core.pipeline_parallel.schedules import FWBWScheduler
 
 TrainerHook = Callable[[ForwardRef("Trainer")], NoReturn]
 
@@ -35,9 +35,9 @@ class OptimizerConfig(AbstractOptimizerConfig):
     weight_decay: float = 0.01
     weight_decay_on_1d_params: bool = False
 
-    lr: float = Ref("..scheduler_cfg.lr")
+    lr: float = Ref("...scheduler_cfg.lr")
 
-    weight_decay: float = Ref("..scheduler_cfg.weight_decay")
+    weight_decay: float = Ref("...scheduler_cfg.weight_decay")
 
     # adam-specific hyperparams
     adam_eps: float = 1e-8
@@ -83,7 +83,7 @@ class OptimizerConfig(AbstractOptimizerConfig):
         for idx, group in enumerate(param_groups):
             extra = "; ".join([f"{k}: {v}" for k, v in group.items() if k != "params"])
             logger.info(
-                f"optimizer group {idx} -> number of parameters: "
+                f"Optim group {idx} -> # params: "
                 f"{convert_num(sum([p.nelement() for p in group['params']]))}; "
                 f"{extra}"
             )
@@ -166,10 +166,10 @@ class SchedulerConfig(AbstractSchedulerConfig):
     weight_decay: float = 0.01
     """Weight decay coefficient for L2 regularization."""
 
-    total_schedule: float = 1e12
+    total_schedule: float = 1000
     """Scheduled count for lr scheduler"""
 
-    warmup_schedule: float = 100e6
+    warmup_schedule: float = 100
     """Scheduled count for warm up"""
 
     scheduler_unit: Literal["iter", "sample", "token"] = "iter"
@@ -180,7 +180,7 @@ class SchedulerConfig(AbstractSchedulerConfig):
         assert self.scheduler_unit in ["iter", "sample", "token"]
 
     def build_scheduler(self, optimizer: Any, *args: Any) -> Any:
-        from steptron.optimizer.hparam_scheduler import FuncConstant, Scheduler
+        from steptronoss.optimizer.hparam_scheduler import FuncConstant, Scheduler
 
         scheduler = Scheduler(
             optimizer=optimizer,
@@ -203,40 +203,26 @@ class MetricConfig(AbstractMetricConfig):
     def to_dict(self, rep: bool = False) -> dict[str, str]:
         return {k: repr(v) for k, v in self.items()}
 
-    def register_metric(self) -> None:
-        """This Function define all metrics used.
-        NOTE: do NOT call super().register_metric(), the register_metric() of all
-        fathers will be called automatically.
-        """
-        from steptron.utils.metrics import GradNormMetric, Metric
+    def register(self) -> None:
+        """Register self to global metric holder."""
+        from steptronoss.utils import GlobalMetrics
+
+        GlobalMetrics.batch_register(self)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        from steptronoss.utils.metrics import GradNormMetric, Metric
 
         self.consumed_tokens = Metric().sum("time").sum("dp")
         self.iteration_time = Metric().mean("time")
         self.learning_rate = Metric().mean("time")
         self.grad_norms = GradNormMetric()
 
-    def register(self) -> None:
-        """Register self to global metric holder."""
-        from steptron.utils import GlobalMetrics
-
-        GlobalMetrics.batch_register(self)
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        for cls in reversed(self.__class__.mro()):
-            if hasattr(cls, "register_metric"):
-                cls.register_metric(self)
-
 
 class TrainerConfig(AbstractTrainerConfig):
-    micro_batch_size: int = 1
-    global_batch_size: int = 10
-    global_seq_length: int = 8192
-    train_iters: int = 10000
+    train_iters: Optional[int] = None
 
     offload_optimizer_state: bool = False
-
-    non_blocking_offload: bool = True
 
     global_data_keys: Optional[list[str]] = Ref("..data_cfg.global_data_keys", None)
     """When set, broadcast data[key] to all ranks (not only on data-source ranks)."""
@@ -244,11 +230,6 @@ class TrainerConfig(AbstractTrainerConfig):
     empty_unused_memory_level: int = 0
 
     log_detailed_grad_norms: bool = False
-
-    enable_prefetch_data: bool = False
-    """If set, trainer will prefetch data of one global-batch before run PP schedule.
-    Use micro-batch level steaming fetch otherwise.
-    """
 
     log_num_zeros_in_grad: bool = True
 
@@ -271,7 +252,7 @@ class TrainerConfig(AbstractTrainerConfig):
         Returns:
             dict: A dict of SCALAR print to logfile/screen
         """
-        from steptron.utils.metrics import GlobalMetrics, HistogramMetric
+        from steptronoss.utils.metrics import GlobalMetrics, HistogramMetric
 
         if tb_writer is not None:
             scalars = {k: v.float() for k, v in metrics.items() if (torch.is_tensor(v) and v.numel() == 1)}
@@ -304,21 +285,19 @@ class TrainerConfig(AbstractTrainerConfig):
         # dataloaders on CP-src to avoid duplicated loader processes/threads.
         return (PM.i_am("PP", 0) or PM.i_am("PP", -1)) and (PM.i_am("TP", 0) and PM.i_am("CP", 0))
 
-    def sync_get_data(self, data_iterator: Iterator[Any]) -> dict[str, Any]:
+    def sync_get_data(self, data_iterator: Iterator[dict]) -> dict[str, Any]:
         # This function Get/Broadcast/Preprocess and return data ready-to-use
-        from steptron.timers import get_timers
-
         from steptronoss.core.parallel_state import (
             PM,
             get_vpp_rank,
             get_vpp_size,
         )
+        from steptronoss.timers import get_timers
         from steptronoss.utils import broadcast_tensors
 
         class NonOfHeadOrTail(dict):
             pass
 
-        rank = torch.distributed.get_rank()
         if PM.i_am("PP", 0) or PM.i_am("PP", -1):
             with get_timers().record("dataloader-next", log_level=2):
                 if PM.i_am("TP", 0):
@@ -377,7 +356,7 @@ class TrainerConfig(AbstractTrainerConfig):
         Build hooks to run after steptron initialized (before building models).
         A hook is a `Callable[[Trainer], []]`
         """
-        from steptron.utils import profile_allreduce
+        from steptronoss.utils import profile_allreduce
 
         def profile_nccl(trainer):
             # NOTE This profile is neccessary for batched_p2p_comm (not using overlap_p2p_comm)
@@ -390,7 +369,6 @@ class TrainerConfig(AbstractTrainerConfig):
 
         hooks: list[TrainerHook] = [
             profile_nccl,
-            self.root().register_metrics,
             print_exp,
         ]
 
@@ -485,9 +463,6 @@ class SaveOptions(Config):
 
     options.all(but=['optimizer']) for NOT load optimizer only.
     """
-
-    # escape dup-name check
-    _is_tree_node: bool = False
 
     model: bool = True
     optimizer: bool = True
@@ -912,20 +887,6 @@ class DataConfig(Config):
 
 
 class BaseExp(Config):
-    """Abstract of A Training:
-
-    - dataloader = exp.data.build_dataloader()
-    - model = exp.model.build_model()
-    - optimizer = exp.optimizer.build_optimizer(model)
-    - schduler = exp.scheduler.build_scheduler(optimizer)
-
-    - loop:
-        data: Any = next(dataloader)
-        inputs: dict = exp.data.preprocess(data)
-        outputs: Any = model(**inputs)
-        loss: Scalar = exp.trainer.loss_func(data, outputs)
-        loss.backward()
-    """
 
     seed = 1234
 
@@ -933,12 +894,6 @@ class BaseExp(Config):
     suffix: str = ""
 
     project_name = None  # used for wandb parsing, 'entity/project_name:tag'
-
-    skip_compiling = True  # skip compiling kernels
-    build_path = None
-
-    # grad_check
-    is_grad_checking: bool = False
 
     @cached_property
     def file_path(self):
@@ -958,25 +913,9 @@ class BaseExp(Config):
             self.exp_name,
         )
 
-    # metric_cfg = MetricConfig
-
-    # tokenizer_cfg = TokenizerConfig
-
-    # optimizer_cfg = OptimizerConfig
-
-    # scheduler_cfg = SchedulerConfig
-
-    # trainer_cfg = TrainerConfig
-
-    # model_cfg = ModelConfig
-
-    # data_cfg = DataConfig
-
-    # checkpoint_cfg = CheckpointConfig
-
     def update_from_args(self):
-        from steptron.utils.arguments import parse_args
-        from steptron.utils.logger import setup_logger
+        from steptronoss.utils.arguments import parse_args
+        from steptronoss.utils.logger import setup_logger
 
         # apply and log diffs from arguments
         args = parse_args()
@@ -989,19 +928,11 @@ class BaseExp(Config):
         if diff:
             logger.info(f"Modified by Args:\n{diff}", at=0)
 
-    def register_metrics(self, trainer):
-        """This is a hook that get the trainer as arg, register any metric here.
-
-        Args:
-            trainer (Any): trainer get by self.get_trainer()
-        """
-        self.metric_cfg.register()
-
     def build_log_writer(self):
         import inspect
         import sys
 
-        from steptron.utils import StepWriter
+        from steptronoss.utils import StepWriter
 
         writer = StepWriter(
             log_dir=self.log_path,

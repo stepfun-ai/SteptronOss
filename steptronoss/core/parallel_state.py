@@ -14,7 +14,7 @@ import torch.distributed as dist
 
 from steptronoss.exp.base_exp import ParallelConfig
 
-from .utils import GlobalMemoryBuffer
+from .utils import GlobalMemoryBuffer, _get_rng_state, _set_rng_seed, _set_rng_state
 
 _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK = 0
 _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = 1
@@ -44,11 +44,13 @@ class ParallelManager:
 
         self.parallels: dict[str, ParallelGroups] = {}
         self.all_parallels: dict[str, dict[str, ParallelGroups]] = {}
+        self.rng_states: dict[str, tuple] = {}
 
         self._all_groups: dict[str, torch.distributed.ProcessGroup] = {}
 
         self._stack = []
         self._cur_cfg: ParallelConfig = None
+        self._rng_seeds: dict[str, int] = {}
 
     def _initialize_torch_dist(self, backend="nccl"):
         if not dist.is_initialized():
@@ -162,6 +164,60 @@ class ParallelManager:
         yield
         self.set_mesh(self._stack.pop(-1))
 
+    def register_rng(self, name: str, seed: int, diff_across: list[str]):
+        if diff_across is None:
+            diff_across = []
+        offset = 0
+        stride = 1
+        for pname in diff_across:
+            assert pname in self.parallels, f"parallel group '{pname}' not initialized"
+            offset += self.rank_in(pname) * stride
+            stride *= self.size_of(pname)
+        rng_seed = int(seed) + offset
+        if name in self._rng_seeds:
+            if self._rng_seeds[name] != rng_seed:
+                raise RuntimeError(f"RNG '{name}' already registered with a different seed")
+            return
+        self._rng_seeds[name] = rng_seed
+
+        # Store old
+        old_state = _get_rng_state()
+
+        # Set New
+        _set_rng_seed(rng_seed)
+
+        # Store New
+        self.rng_states[name] = _get_rng_state()
+
+        # Restore old
+        _set_rng_state(old_state)
+
+    @contextmanager
+    def use_rng(self, name: str):
+        if name not in self.rng_states:
+            raise RuntimeError(f"RNG '{name}' is not registered")
+
+        raw_rng_state = _get_rng_state()
+
+        _set_rng_state(self.rng_states[name])
+
+        yield
+        self.rng_states[name] = _get_rng_state()
+
+        _set_rng_state(raw_rng_state)
+
+    def get_all_rng(self):
+        current_state = _get_rng_state()
+        stashed_state = self.rng_states.copy()
+        return current_state, stashed_state
+
+    def set_all_rng(self, saved: tuple[tuple, dict]):
+        current_state, stashed_state = saved
+        _set_rng_state(current_state)
+        self.rng_states.clear()
+        self.rng_states.update(stashed_state)
+
+    # Parallel APIs
     def size_of(self, name: str) -> int:
         assert name in self.parallels
         return dist.get_world_size(self.parallels[name].group)

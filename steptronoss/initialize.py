@@ -12,15 +12,11 @@ from steptronoss.core.parallel_state import PM
 
 def mtp_initialize(models):
     torch.distributed.barrier()
-    from steptron.core.parallel_state import PM
-    from steptron.utils.utils import unwrap_model
+    from steptronoss.core.parallel_state import PM
+    from steptronoss.utils.utils import unwrap_model
 
-    model_may_need_sync = [
-        model for model in models if unwrap_model(model).need_mtp_sync
-    ]
-    assert (
-        len(model_may_need_sync) <= 1
-    ), "we currently do not support multiple embeddings on the same rank"
+    model_may_need_sync = [model for model in models if unwrap_model(model).need_mtp_sync]
+    assert len(model_may_need_sync) <= 1, "we currently do not support multiple embeddings on the same rank"
     # build new group for mtp
     if len(model_may_need_sync) == 1:
         tensor_in = torch.tensor(
@@ -29,16 +25,10 @@ def mtp_initialize(models):
             device=torch.cuda.current_device(),
         )
     else:
-        tensor_in = torch.tensor(
-            -1, dtype=torch.int64, device=torch.cuda.current_device()
-        )
-    tensor_out = -1 * torch.ones(
-        PM.size_of("PP"), dtype=torch.int64, device=torch.cuda.current_device()
-    )
+        tensor_in = torch.tensor(-1, dtype=torch.int64, device=torch.cuda.current_device())
+    tensor_out = -1 * torch.ones(PM.size_of("PP"), dtype=torch.int64, device=torch.cuda.current_device())
     # gather in pp group, and the ranks with lm_embeddings will send its rank otherwise send -1
-    torch.distributed.all_gather_into_tensor(
-        tensor_out, tensor_in, group=PM.group_of("PP")
-    )
+    torch.distributed.all_gather_into_tensor(tensor_out, tensor_in, group=PM.group_of("PP"))
     emb_sync_indices = (tensor_out != -1).nonzero(as_tuple=True)[0].tolist()
     emb_sync_residual_indices = (tensor_out == -1).nonzero(as_tuple=True)[0].tolist()
     emb_sync_ranks = []
@@ -85,9 +75,7 @@ def set_mpu_random_seed(seed_):
     # For expert layers, create a unique seed for each (ep, etp) pair.
     # Use a different offset than attention tp.
     expert_offset = seed + 3718
-    etp_rank_specific_seed = (
-        expert_offset + PM.rank_in("ETP") + PM.rank_in("EP") * PM.size_of("ETP")
-    )
+    etp_rank_specific_seed = expert_offset + PM.rank_in("ETP") + PM.rank_in("EP") * PM.size_of("ETP")
     # Data parallel gets the original seed.
     data_parallel_seed = seed
 
@@ -96,6 +84,4 @@ def set_mpu_random_seed(seed_):
     torch.cuda.manual_seed(data_parallel_seed)
     # and model parallel state.
     _CUDA_RNG_STATE_TRACKER.add(_MODEL_PARALLEL_RNG_TRACKER_NAME, tp_rank_specific_seed)
-    _CUDA_RNG_STATE_TRACKER.add(
-        _EXPERT_MODEL_PARALLEL_RNG_TRACKER_NAME, etp_rank_specific_seed
-    )
+    _CUDA_RNG_STATE_TRACKER.add(_EXPERT_MODEL_PARALLEL_RNG_TRACKER_NAME, etp_rank_specific_seed)

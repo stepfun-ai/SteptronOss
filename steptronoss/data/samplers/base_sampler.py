@@ -1,3 +1,4 @@
+import heapq
 from abc import abstractmethod
 
 import torch
@@ -75,7 +76,7 @@ class LoopedShuffleSampler(LazyUpdateNextable):
 
     def _reset_idx_cur_epoch(self):
         epoch = self.data_idx // self.size
-        logger.info(f"> reset idx cur epoch, Current Epoch: {epoch}, offset: {self.data_idx}")
+        # logger.info(f"> reset idx cur epoch, Current Epoch: {epoch}, offset: {self.data_idx}")
         seed = self.base_seed
         if not self.same_order_for_each_epoch:
             seed += epoch
@@ -110,16 +111,22 @@ class WeightedRandomSampler(LazyUpdateNextable):
         if torch.any(weights <= 0):
             raise ValueError("weights must be positive")
 
-        self._counts = torch.zeros(self.size, dtype=torch.long)
+        self._counts = torch.zeros(self.size, dtype=torch.float32)
+        self._inv_weights = (1.0 / self._weights).tolist()
+        self._scores = [0.0 for _ in range(self.size)]
+        self._heap = [(0.0, idx) for idx in range(self.size)]
+        heapq.heapify(self._heap)
 
     def _select_idx(self) -> int:
-        yields = self._counts.to(dtype=torch.float32) / self._weights
-        min_yield = torch.min(yields)
-        candidates = torch.nonzero(yields == min_yield, as_tuple=False).flatten()
-        if candidates.numel() == 1:
-            return int(candidates.item())
-        choice = torch.multinomial(self._weights[candidates], 1, generator=self._rng).item()
-        return int(candidates[choice].item())
+        while self._heap:
+            score, idx = heapq.heappop(self._heap)
+            if score == self._scores[idx]:
+                return int(idx)
+        # Heap should never be empty; rebuild defensively.
+        self._heap = [(score, idx) for idx, score in enumerate(self._scores)]
+        heapq.heapify(self._heap)
+        score, idx = heapq.heappop(self._heap)
+        return int(idx)
 
     def get(self) -> int:
         if self._pending_idx is None:
@@ -130,6 +137,8 @@ class WeightedRandomSampler(LazyUpdateNextable):
         idx = self._pending_idx if self._pending_idx is not None else self._select_idx()
         self._pending_idx = None
         self._counts[idx] += 1
+        self._scores[idx] += self._inv_weights[idx]
+        heapq.heappush(self._heap, (self._scores[idx], idx))
         self.data_idx += 1
 
     def state_dict(self):
@@ -146,11 +155,14 @@ class WeightedRandomSampler(LazyUpdateNextable):
         self.data_idx = state_dict["data_idx"]
         counts = state_dict.get("counts")
         if counts is None:
-            self._counts = torch.zeros(self.size, dtype=torch.long)
+            self._counts = torch.zeros(self.size, dtype=torch.float32)
         else:
             if len(counts) != self.size:
                 raise ValueError(f"counts length ({len(counts)}) must match size ({self.size})")
-            self._counts = torch.tensor(counts, dtype=torch.long)
+            self._counts = torch.tensor(counts, dtype=torch.float32)
+        self._scores = [float(self._counts[i]) * self._inv_weights[i] for i in range(self.size)]
+        self._heap = [(self._scores[i], i) for i in range(self.size)]
+        heapq.heapify(self._heap)
         rng_state = state_dict.get("rng_state")
         if rng_state is None:
             self._rng.manual_seed(int(self.base_seed))

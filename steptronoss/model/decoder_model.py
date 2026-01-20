@@ -48,11 +48,29 @@ class DecoderLLMConfig(Megatron3DParallelModelConfig):
     tok_embed_cfg = InputEmbeddingConfig
     out_embed_cfg = OutputEmbeddingConfig
 
-    def build_layermap(self):
-        return None
+    def pp_vp_allocation(self, abs_pp_rank: int) -> list[dict]:
+        from steptronoss.utils.general import list_split
+
+        # use list_split: [0, 1, 2], split=2 -> [0, 1], [2]
+        chunk_layers = len(list_split(range(self.num_layers), get_vpp_size() * PM.size_of("PP"))[abs_pp_rank])
+
+        return [{"recompute": False}] * chunk_layers
+
+    def build_layer_map(self):
+        layer_map, layer_id = dict(), 0
+
+        for vp in range(get_vpp_size()):
+            for pp in range(PM.size_of("PP")):
+                layer_map.setdefault(pp, dict())
+                layer_map[pp].setdefault(vp, dict())
+                per_vp_layers = self.pp_vp_allocation(vp * PM.size_of("PP") + pp)
+                for i in range(len(per_vp_layers)):
+                    layer_map[pp][vp][layer_id] = per_vp_layers[i]
+                    layer_id += 1
+        return layer_map
 
     def build_model(self):
-        return LlamaLikeModel(cfg=self, layer_map=self.build_layermap())
+        return LlamaLikeModel(cfg=self, layer_map=self.build_layer_map())
 
     def sanity_check(self):
         super().sanity_check()
@@ -107,9 +125,10 @@ class TransformerBlock(nn.Module):
         """Forward pass through the transformer block."""
 
         if self.recompute and self.training:
+            y = self.feed_forward(x)
             h = x + checkpoint(
                 self._attn_forward,
-                getattr(self.cfg, "distribute_saved_activations", False),
+                self.cfg.tp_cfg.distribute_saved_activations,
                 self.attention_norm(x),
                 cu_seqlens=cu_seqlens,
                 max_seq_len=max_seq_len,
@@ -231,8 +250,8 @@ class LlamaLikeModel(MegatronModule):
         """
         if PM.size_of("CP") > 1:
             assert cu_seqlens is not None, "cu_seqlens required for CP, use [0, len(input_ids)] if you dont have one."
-            if position_id is None:
-                position_id = get_position_id_from_cu_seqlens(cu_seqlens)
+        if cu_seqlens is not None and position_id is None:
+            position_id = get_position_id_from_cu_seqlens(cu_seqlens)
 
         if self.sequence_parallel:
             rng_context = get_cuda_rng_tracker().fork()

@@ -1,8 +1,10 @@
 """Utility functions used throughout Megatron core"""
 
 import operator
+import random
 from functools import reduce
 
+import numpy as np
 import torch
 
 
@@ -157,3 +159,56 @@ except:
         """Works as a drop-in replacement for amp_C.multi_tensor_scale."""
         for src, dst in zip(tensor_lists[0], tensor_lists[1]):
             dst.copy_(src * scale)
+
+
+def _set_cuda_rng_state(new_state, device=-1):
+    """Sets the random number generator state of the current GPU.
+
+    Argumentss:
+        new_state (torch.ByteTensor): The desired state
+    This function is adapted from PyTorch repo (torch.cuda.set_rng_state)
+    with a single change: the input state is not cloned. Cloning caused
+    major performance issues for +4 GPU cases.
+    """
+    from torch.cuda import _lazy_call
+
+    # newer PyTorch
+    if device == -1:
+        device = torch.device("cuda")
+    elif isinstance(device, str):
+        device = torch.device(device)
+    elif isinstance(device, int):
+        device = torch.device("cuda", device)
+
+    def cb():
+        idx = device.index
+        if idx is None:
+            idx = torch.cuda.current_device()
+        default_generator = torch.cuda.default_generators[idx]
+        default_generator.set_state(new_state)
+
+    _lazy_call(cb)
+
+
+def _get_rng_state():
+    return (
+        torch.get_rng_state(),
+        random.getstate(),
+        np.random.get_state(),
+        torch.cuda.get_rng_state() if torch.cuda.device_count() else None,
+    )
+
+
+def _set_rng_state(state_tuple: tuple):
+    torch.set_rng_state(state_tuple[0])
+    random.setstate(state_tuple[1])
+    np.random.set_state(state_tuple[2])
+    if torch.cuda.device_count() > 0:
+        _set_cuda_rng_state(state_tuple[3])
+
+
+def _set_rng_seed(rng_seed: int):
+    random.seed(rng_seed)
+    np.random.seed(rng_seed)
+    torch.manual_seed(rng_seed)
+    torch.cuda.manual_seed(rng_seed)

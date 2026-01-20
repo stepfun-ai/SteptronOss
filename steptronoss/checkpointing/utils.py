@@ -6,8 +6,7 @@ import numpy as np
 import torch
 from megfile import smart_listdir
 
-from steptronoss.core import parallel_state as mpu
-from steptronoss.core import tensor_parallel
+from steptronoss.core.parallel_state import PM
 
 
 def recur_stat(state_dict):
@@ -71,18 +70,3 @@ def analyze_dir(path):
     pp = len(pp) or None
     dp = len(dp)
     return tp, pp, dp
-
-
-def get_rng_state():
-    """collect rng state across data parallel ranks"""
-    rng_state = {
-        "random_rng_state": random.getstate(),
-        "np_rng_state": np.random.get_state(),
-        "torch_rng_state": torch.get_rng_state(),
-        "cuda_rng_state": torch.cuda.get_rng_state(),
-        "rng_tracker_states": tensor_parallel.get_cuda_rng_tracker().get_states(),
-    }
-
-    rng_state_list = [rng_state]
-
-    return rng_state_list

@@ -73,7 +73,7 @@ class QwenModel(LlamaLikeModel):
                 Script(
                     src=f"{prefix_src}.self_attn.[qkv]_proj.weight",
                     op=GQAMergeQKV(
-                        group_num=layer.attention.num_heads,
+                        group_num=layer.attention.num_kv_heads,
                         head_dim=layer.attention.head_dim,
                     )
                     + KeepThisTP()
@@ -86,7 +86,7 @@ class QwenModel(LlamaLikeModel):
                     Script(
                         src=f"{prefix_src}.self_attn.[qkv]_proj.bias",
                         op=GQAMergeQKVBias(
-                            group_num=layer.attention.num_heads,
+                            group_num=layer.attention.num_kv_heads,
                             head_dim=layer.attention.head_dim,
                         )
                         + KeepThisTP()

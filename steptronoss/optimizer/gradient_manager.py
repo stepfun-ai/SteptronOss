@@ -7,7 +7,6 @@ import torch
 from steptronoss.core import tensor_parallel
 from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import GradientManagerConfig
-from steptronoss.model.module import MegatronModule
 from steptronoss.model.utils.comm_buffer import SteptronParameter
 from steptronoss.timers import get_timers
 
@@ -18,7 +17,7 @@ class AccInFP32GradientManager(GradientManager):
     def __init__(
         self,
         cfg: GradientManagerConfig,
-        model: MegatronModule,
+        model: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
     ):
 
@@ -97,30 +96,29 @@ class AccInFP32GradientManager(GradientManager):
             param_group: dict[str, list[SteptronParameter]]
             # For all the parameters in this group:
             for i, param in enumerate(param_group["params"]):
-                if param.requires_grad:
-                    # bfloat16 params
-                    if param.is_cuda and param.dtype == torch.bfloat16:
-                        # Create a copy
-                        main_param = param.detach().clone().float()
-                        tensor_parallel.copy_tensor_model_parallel_attributes(main_param, param)
-                        fp16_params.append(param)
-                        fp16_params_in_fp32.append(main_param)
+                # bfloat16 params
+                if param.is_cuda and param.dtype == torch.bfloat16:
+                    # Create a copy
+                    main_param = param.detach().clone().float()
+                    tensor_parallel.copy_tensor_model_parallel_attributes(main_param, param)
+                    fp16_params.append(param)
+                    fp16_params_in_fp32.append(main_param)
 
-                        # Reset existing state dict key to the new main param.
-                        param_group["params"][i] = main_param
-                        if param in optimizer.state:
-                            optimizer.state[main_param] = optimizer.state.pop(param)
-                    # fp32 params.
-                    elif param.is_cuda and param.dtype == torch.float32:
-                        fp32_params.append(param)
-                        param_group["params"][i] = param
+                    # Reset existing state dict key to the new main param.
+                    param_group["params"][i] = main_param
+                    if param in optimizer.state:
+                        optimizer.state[main_param] = optimizer.state.pop(param)
+                # fp32 params.
+                elif param.is_cuda and param.dtype == torch.float32:
+                    fp32_params.append(param)
+                    param_group["params"][i] = param
 
-                    else:
-                        raise TypeError(
-                            "Wrapped parameters must be CUDA tensors of dtype "
-                            "torch.float32 or torch.bfloat16. "
-                            f"Received dtype={param.dtype}, device={param.device}"
-                        )
+                else:
+                    raise TypeError(
+                        "Wrapped parameters must be CUDA tensors of dtype "
+                        "torch.float32 or torch.bfloat16. "
+                        f"Received dtype={param.dtype}, device={param.device}"
+                    )
         return fp32_params, fp16_params, fp16_params_in_fp32
 
     @torch.no_grad()
@@ -159,12 +157,10 @@ class AccInFP32GradientManager(GradientManager):
         for fp16_param, fp32_param in zip(self.fp16_params, self.fp16_params_in_fp32):
             fp32_param.grad = fp16_param.main_grad.float()
             fp16_param.grad = None
-            fp16_param.main_grad = None
 
         # For fp32 grads, we need to reset the grads to main grad.
         for param in self.fp32_params:
             param.grad = param.main_grad
-            param.main_grad = None
 
     def _copy_fp32_params_to_model_params(self) -> None:
         # Only needed for the float16 params.

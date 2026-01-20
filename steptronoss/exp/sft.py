@@ -17,14 +17,9 @@ class SFTDatasetsConfig(Config):
 
 
 class SFTDataConfig(DataConfig):
+    """For SFT dataloader, we extract an individual dataset_cfg"""
+
     dataset_cfg: SFTDatasetsConfig = SFTDatasetsConfig
 
     def build_dataloader(self, dp_rank=0, dp_size=1):
-        from steptronoss.data.dataloader import MixedDataloader
-
-        dataset_epochs = self.dataset_cfg.build_datasets()
-        dataloader = MixedDataloader(
-            datasets=[x[0] for x in dataset_epochs.values()],
-            epochs=[x[1] for x in dataset_epochs.values()],
-        )
-        return dataloader
+        raise NotImplementedError
