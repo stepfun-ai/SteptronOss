@@ -30,11 +30,9 @@
 
 ::: steptronoss.model.module
 
-::: steptronoss.model.utils
+::: steptronoss.model.utils.utils
 
-::: steptronoss.model.comm_buffer
-
-::: steptronoss.model.muon_distributed_utils
+::: steptronoss.model.utils.comm_buffer
 
 ### Model Common
 

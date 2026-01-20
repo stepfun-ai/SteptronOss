@@ -1,4 +1,5 @@
 # Copyright (c) 2026, STEPFUN CORPORATION. All rights reserved.
+from __future__ import annotations
 
 """Megatron Module"""
 
@@ -15,7 +16,9 @@ if TYPE_CHECKING:
 
 from steptronoss.core import parallel_state as mpu
 from steptronoss.core.utils import make_viewless_tensor
-from steptronoss.exp.inference import BaseInferenceConfig
+
+if TYPE_CHECKING:
+    from steptronoss.exp.inference import BaseInferenceConfig
 
 _FLOAT_TYPES = (torch.FloatTensor, torch.cuda.FloatTensor)
 _HALF_TYPES = (torch.HalfTensor, torch.cuda.HalfTensor)
@@ -36,9 +39,7 @@ class MegatronModule(torch.nn.Module):
         super().__init__()
         if mpu.model_parallel_is_initialized():
             self.pp_rank = mpu.get_pipeline_model_parallel_rank(ignore_virtual=False)
-            self.pp_size = mpu.get_pipeline_model_parallel_world_size(
-                ignore_virtual=False
-            )
+            self.pp_size = mpu.get_pipeline_model_parallel_world_size(ignore_virtual=False)
 
     def is_pipeline_first_stage(self):
         return self.pp_rank == 0
@@ -160,16 +161,12 @@ class MegatronModule(torch.nn.Module):
     reshaper: "OnlineReshaper"
 
     def load_hf_state_dict(self, state_dict, *args, **kwargs):
-        assert hasattr(
-            self, "reshaper"
-        ), f"{self.__class__}.reshaper not defined! HF load/dump disabled!"
+        assert hasattr(self, "reshaper"), f"{self.__class__}.reshaper not defined! HF load/dump disabled!"
         state_dict = self.reshaper.forward(state_dict)
         return self.load_state_dict(state_dict, *args, **kwargs)
 
     def hf_state_dict(self):
-        assert hasattr(
-            self, "reshaper"
-        ), f"{self.__class__}.reshaper not defined! HF load/dump disabled!"
+        assert hasattr(self, "reshaper"), f"{self.__class__}.reshaper not defined! HF load/dump disabled!"
         from steptronoss.utils import recur_to
 
         state_dict = recur_to(self.state_dict(), "cpu")
