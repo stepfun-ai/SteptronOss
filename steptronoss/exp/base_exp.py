@@ -538,71 +538,6 @@ class CheckpointConfig(Config):
         ), "load_safetensors and load_path cannot be set at the same time"
 
 
-class MoEConfig(Config):
-    use_moe: bool = False
-    moe_every_n_layer: int = 1
-    moe_num_experts: int = 1
-    moe_top_k: int = 1
-    moe_aux_loss_coef: float = 1e-2
-    moe_hidden_size: int = 12288
-    norm_expert_weight: bool = True
-
-    use_ep_group_wise_aux_loss: bool = False
-    """Enable expert group-wise auxiliary loss"""
-
-    moe_style: Literal["mixtral", "marco", "old"] = "marco"
-    """moe imple style, one of ['mixtral', 'marco', 'old']"""
-
-    moe_layer_list: Optional[list[int]] = None
-    """layer ids of layers which use moe"""
-
-    share_expert_dim: int = 0
-    """Dimension of shared moe ffn"""
-
-    moe_enable_group_gemm: bool = False
-    use_groupgemm_bwd: bool = True
-
-    use_fp32_router_for_moe: bool = True
-
-    # deepep settings for expert parallel acceleration
-    moe_enable_deepep: bool = False
-    """Enable DeepEP acceleration for expert parallel when EP>1 and ETP=1"""
-    moe_deepep_num_sms: int = 0
-    """Number of SMs to use for DeepEP kernels, 0 means auto-detect"""
-    moe_permute_fusion: bool = False
-    """Enable permutation fusion in DeepEP"""
-
-    # ===========================================================================================
-    # deepseekv3 new features
-    enable_auxiliary_loss_free_load_balance: bool = False  # enable auxiliary loss free load balance
-    enable_sigmoid_router: bool = False  # enable sigmoid router
-    enable_scaling_factor: bool = False  # enable scaling factor in moe
-    router_bias_update_rate: float = 1e-4  # update rate in auxiliary loss free load balance
-    routed_scaling_factor: float = 1.0  # scaling factor for moe
-    # ===========================================================================================
-
-    distribute_saved_activations: bool = Ref("..distribute_saved_activations", False)
-
-    data_parallel_size: int = Ref("..data_parallel_size")
-    global_batch_size: int = Ref("...trainer_cfg.global_batch_size")
-    micro_batch_size: int = Ref("...trainer_cfg.micro_batch_size")
-
-    # for debug only
-    enable_force_balance: bool = False
-
-    def get_aux_loss_calib_scale(self) -> float:
-        """aux loss is local, and cannot percept grad_acc_steps, let's scale the coef instead."""
-        from steptronoss.core.parallel_state import PM
-
-        if self.moe_aux_loss_coef != 0 and PM.size_of("CP") > 1:
-            assert self.use_ep_group_wise_aux_loss, (
-                "For CP size > 1, because only EP-group-wise MoE aux loss is validated, "
-                "so currently we only support EP-group-wise MoE aux loss, "
-                "(set use_ep_group_wise_aux_loss=True or disable moe_aux_loss_coef)."
-            )
-        return (self.micro_batch_size * self.data_parallel_size) / self.global_batch_size
-
-
 class ParallelConfig(AbstractParallelConfig):
     parallel_definition: dict[str, str] = {
         "TP": "(p d t) -> (p d) t",
@@ -612,6 +547,7 @@ class ParallelConfig(AbstractParallelConfig):
         "MP": "(p d t) -> d (p t)",
         "EP": "(p edp c ep etp) -> (p c edp etp) ep",
         "ETP": "(p edp c ep etp) -> (p c edp ep) etp",
+        "EETP": "(p edp c ep etp) -> (p c edp) (ep etp)",
         "EDP": "(p edp c ep etp) -> (p c ep etp) edp",
         "EMP": "(p edp c ep etp) -> edp (p c ep etp)",
     }
@@ -627,6 +563,9 @@ class ParallelConfig(AbstractParallelConfig):
 
     def build_parallel(self) -> dict[str, list[list[int]]]:
         from steptronoss.core.parallel_state import PM
+
+        if self.expert_model_parallel_size == 1:
+            self.expert_tensor_parallel_size = self.tensor_model_parallel_size
 
         args = {
             "p": self.pipeline_model_parallel_size,
@@ -766,7 +705,7 @@ class ModelConfig(Megatron3DParallelModelConfig):
     layernorm_epsilon: float = 1e-05
     attention_dropout: float = 0.0
 
-    moe_cfg = MoEConfig
+    # moe_cfg = MoEConfig
 
     use_vpp_v2 = False
     gather_output = False

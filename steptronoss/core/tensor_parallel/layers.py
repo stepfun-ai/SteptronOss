@@ -222,8 +222,6 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
             if ctx.gradient_accumulation_fusion:
                 if weight.main_grad.dtype == torch.float32:
                     fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(total_input, grad_output, weight.main_grad)
-                elif weight.main_grad.dtype == torch.float16:
-                    fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp16(total_input, grad_output, weight.main_grad)
                 else:
                     raise RuntimeError("Unsupported gradient type for gradient accumulation fusion")
                 grad_weight = None
@@ -405,8 +403,6 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(torch.autog
             if ctx.gradient_accumulation_fusion:
                 if weight.main_grad.dtype == torch.float32:
                     fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(total_input, grad_output, weight.main_grad)
-                elif weight.main_grad.dtype == torch.float16:
-                    fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp16(total_input, grad_output, weight.main_grad)
                 else:
                     raise RuntimeError("Unsupported gradient type for gradient accumulation fusion")
                 grad_weight = None
@@ -414,18 +410,11 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(torch.autog
                 grad_weight = grad_output.t().matmul(total_input)
             return grad_weight
 
-        if PM.size_of("TP") == 1:
-            grad_input = grad_output.matmul(weight)
-            grad_weight = get_grad_weight(input, grad_output, weight)
-            grad_bias = grad_output.sum(dim=0) if use_bias else None
-            return (grad_input, grad_weight, grad_bias) + (None,) * 5
-
-        handle = None
+        waiter = lambda: None
 
         if ctx.sequence_parallel:
-            world_size = PM.size_of("TP")
             dim_size = list(input.size())
-            dim_size[0] = dim_size[0] * world_size
+            dim_size[0] = dim_size[0] * PM.size_of("TP")
 
             all_gather_buffer = get_global_memory_buffer().get_tensor(dim_size, input.dtype, "mpu")
             handle = torch.distributed.all_gather_into_tensor(
@@ -434,6 +423,7 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(torch.autog
                 group=PM.group_of("TP"),
                 async_op=True,
             )
+            waiter = lambda: handle.wait()
 
             # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
             # gather is scheduled before the input gradient computation
@@ -444,9 +434,7 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(torch.autog
 
         grad_input = grad_output.matmul(weight)
 
-        if ctx.sequence_parallel:
-            if handle is not None:
-                handle.wait()
+        waiter()
 
         # Doing gather + slicing during the NeMo forward pass can make this tensor
         # not be contiguous. PyTorch only checks if the tensor is contiguous, and only
@@ -462,6 +450,7 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(torch.autog
             handle = torch.distributed.all_reduce(grad_input, group=PM.group_of("TP"), async_op=True)
             # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
             # all-reduce is scheduled before the weight gradient computation
+            waiter = lambda: handle.wait()
 
         if ctx.sequence_parallel:
             if custom_pre_recompute_function_input is not None:
@@ -483,21 +472,14 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(torch.autog
             )
             # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
             # reduce scatter is scheduled before the weight gradient computation
+            waiter = lambda: handle.wait()
 
         grad_weight = get_grad_weight(total_input, grad_output, weight)
         grad_bias = grad_output.sum(dim=0) if use_bias else None
 
+        waiter()
         if ctx.sequence_parallel:
-            handle.wait()
-            return (
-                (sub_grad_input, grad_weight, grad_bias)
-                + +(None,) * 5
-                + (custom_pre_recompute_function_input_grad,)
-                + (None,)
-            )
-
-        if ctx.async_grad_allreduce and not ctx.use_moe:
-            handle.wait()
+            return (sub_grad_input, grad_weight, grad_bias) + (None,) * 7
 
         grads = pre_function_backward(pre_func_output, grad_input, detached_inputs)
         if custom_pre_recompute_function_input is not None:

@@ -1,5 +1,6 @@
 """Model utilities for SteptronOss."""
 
+import torch
 from loguru import logger
 
 
@@ -62,3 +63,28 @@ def load_model_checkpoint(models, state_dict, strict_load_model=True):
             for name, param in model.named_parameters():
                 if strict_load_model or name not in missing_keys_set:
                     param.has_initialized = True
+
+
+class AuxLossBackwardHook(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, output, aux_loss):
+        # Keep aux_loss alive for backward and attach a gradient path.
+        ctx.save_for_backward(aux_loss)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Inject a unit gradient for aux_loss while passing through grad_output.
+        (aux_loss,) = ctx.saved_tensors
+        scaled_aux_loss_grad = torch.ones_like(aux_loss)
+        return grad_output, scaled_aux_loss_grad
+
+
+def bind_aux_loss(output: torch.Tensor, aux_loss: torch.Tensor) -> torch.Tensor:
+    """Bind an auxiliary loss to an output tensor for backward propagation.
+
+    This keeps the forward value unchanged while ensuring gradients flow to
+    ``aux_loss`` during backpropagation.
+    """
+    # Attach aux_loss to output without changing forward values; gradients will flow to aux_loss.
+    return AuxLossBackwardHook.apply(output, aux_loss)

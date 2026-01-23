@@ -22,8 +22,13 @@ class FeedForwardConfig(Config):
     swiglu_limit: float
     swiglu_recompute_silu_out_proj: bool
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def activation(self, x):
+        l, r = torch.chunk(x, 2, dim=-1)
+        l = F.silu(l)
+        if self.swiglu_limit != None:
+            l = l.clamp(min=None, max=self.swiglu_limit)
+            r = r.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
+        return l * r
 
     def build_model(self, layer_id: int):
         return FeedForward(cfg=self, layer_id=layer_id)
@@ -38,16 +43,8 @@ class FeedForward(torch.nn.Module):
 
         self.swiglu_limit = cfg.swiglu_limit
 
-        def swiglu(x):
-            l, r = torch.chunk(x, 2, dim=-1)
-            l = F.silu(l)
-            if self.swiglu_limit != None:
-                l = l.clamp(min=None, max=self.swiglu_limit)
-                r = r.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
-            return l * r
-
-        self.swiglu = swiglu
-        self.swiglu_recompute_silu_out_proj = cfg.swiglu_recompute_silu_out_proj
+        self.activation = self.cfg.activation
+        self.fuse_activation_w2 = cfg.swiglu_recompute_silu_out_proj
 
         self.w1 = tensor_parallel.ColumnParallelLinear(
             cfg.hidden_size,
@@ -62,16 +59,15 @@ class FeedForward(torch.nn.Module):
             cfg.hidden_size,
             bias=False,
             input_is_parallel=True,
-            custom_pre_recompute_function=(self.swiglu if self.swiglu_recompute_silu_out_proj else None),
+            custom_pre_recompute_function=(self.activation if self.fuse_activation_w2 else None),
             **self.cfg.tp_cfg.get_tp_kwargs(),
         )
-        self.swiglu_recompute_silu_out_proj = cfg.swiglu_recompute_silu_out_proj
 
-    def forward(self, x, **kwargs):
-        if self.swiglu_recompute_silu_out_proj:
+    def forward(self, x, **kwargs) -> torch.FloatTensor:
+        if self.fuse_activation_w2:
             x = self.w1(x)[0]
             output = self.w2(x)[0]
         else:
-            x = self.swiglu(self.w1(x)[0])
+            x = self.activation(self.w1(x)[0])
             output = self.w2(x)[0]
         return output

@@ -11,7 +11,6 @@ from steptronoss.exp.base_exp import (
     Megatron3DParallelModelConfig,
     MetricConfig,
     ProfilerConfig,
-    Ref,
     SchedulerConfig,
     TrainerConfig,
 )
