@@ -1,8 +1,10 @@
 import torch
+from configurize import Ref
 
 from steptronoss.exp.base_exp import ParallelConfig
-from steptronoss.model.common.feed_forward import FeedForwardConfig
 from steptronoss.model.common.grouped_query_attention import AttentionConfig
+from steptronoss.model.common.moe_block import MoEConfig
+from steptronoss.model.common.moe_share_expert_ffn import MoEFeedForwardConfig
 from steptronoss.model.common.parallel_embedding import (
     InputEmbeddingConfig,
     OutputEmbeddingConfig,
@@ -21,11 +23,11 @@ class Qwen3AttentionConfig(AttentionConfig):
         self.use_sliding_window = False
         self.num_sliding_attention_heads = None
 
-        self.num_attention_heads = 16
-        self.num_attention_groups = 8  # KV heads for GQA
+        self.num_attention_heads = 32
+        self.num_attention_groups = 4  # KV heads for GQA
 
         self.head_dim = 128
-        self.hidden_size = 2048
+        self.hidden_size = Ref("..hidden_size")
 
         self.use_headwise_attn_gate = False
         self.use_qkv_bias = False
@@ -43,17 +45,42 @@ class Qwen3AttentionConfig(AttentionConfig):
         self.yarn_beta_slow = 1.0
         self.yarn_beta_fast = 32.0
         self.ntk_interp_ratio = 1.0
-        self.max_position_embeddings = 327680
+        self.max_position_embeddings = 32768
 
 
-class Qwen3FeedForwardConfig(FeedForwardConfig):
+class Qwen3MoEConfig(MoEConfig):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.tp_cfg = Ref("...tp_cfg")
+        self.hidden_size = Ref("...hidden_size")
+        self.activation = Ref("..activation")
+
+        self.moe_num_experts = 128
+        self.moe_top_k = 8
+        self.moe_aux_loss_coef = 0.0
+
+        self.enable_auxiliary_loss_free_load_balance = False
+        self.router_bias_update_rate = 0.0
+
+        self.moe_hidden_size = 768
+        self.routed_scaling_factor = 1.0
+        self.enable_sigmoid_router = False
+        self.moe_enable_deepep = False
+        self.norm_expert_weight = True
+        self.moe_layer_list = list(range(48))
+        self.share_expert_dim = 0
+
+
+class Qwen3MoEFeedForwardConfig(MoEFeedForwardConfig):
     """Qwen3 feed-forward configuration."""
+
+    moe_cfg = Qwen3MoEConfig
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.recompute_granularity = None
 
-        self.hidden_size = 2048
+        self.hidden_size = Ref("..hidden_size")
         self.ffn_hidden_size = 6144
 
         self.layernorm_epsilon = 1e-6
@@ -69,7 +96,7 @@ class Qwen3InputEmbeddingConfig(InputEmbeddingConfig):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.vocab_size = 151936
-        self.hidden_size = 2048
+        self.hidden_size = Ref("..hidden_size")
         self.embedding_weights_in_fp32 = False
         self.fp32_residual_connection = False
 
@@ -80,7 +107,7 @@ class Qwen3OutputEmbeddingConfig(OutputEmbeddingConfig):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.vocab_size = 151936
-        self.hidden_size = 2048
+        self.hidden_size = Ref("..hidden_size")
         self.fp32_rms_norm = True
 
         self.rms_norm_zero_gamma = False
@@ -94,27 +121,27 @@ class Qwen3ParallelConfig(ParallelConfig):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.tensor_model_parallel_size = 2
+        self.tensor_model_parallel_size = 4
         self.pipeline_model_parallel_size = 1
         self.virtual_pipeline_model_parallel_size = 1
         self.context_parallel_size = 1
-        self.expert_model_parallel_size = 1
+        self.expert_model_parallel_size = 8
         self.expert_tensor_parallel_size = 1
 
 
-class Qwen3_1p7BConfig(DecoderLLMConfig):
-    """Qwen3 1.7B model configuration.
+class Qwen3_30A3BConfig(DecoderLLMConfig):
+    """Qwen3 8B model configuration.
 
-    Model architecture parameters based on Qwen3-1.7B:
-    - 28 layers
+    Model architecture parameters based on Qwen3-8B:
+    - 48 layers
     - 2048 hidden size
-    - 16 attention heads with 8 KV heads (GQA)
+    - 32 attention heads with 4 KV heads (GQA)
     - 6144 FFN hidden size
     - 128 head dimension
     - 151936 vocab size
     """
 
-    ffn_cfg = Qwen3FeedForwardConfig
+    ffn_cfg = Qwen3MoEFeedForwardConfig
     attn_cfg = Qwen3AttentionConfig
     tok_embed_cfg = Qwen3InputEmbeddingConfig
     out_embed_cfg = Qwen3OutputEmbeddingConfig
@@ -123,12 +150,12 @@ class Qwen3_1p7BConfig(DecoderLLMConfig):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Model architecture
-        self.num_layers = 28
+        self.num_layers = 48
         self.hidden_size = 2048
         self.layernorm_epsilon = 1e-6
         self.rms_norm_zero_gamma = False
         self.recompute = False
-        self.tie_embedding = True
+        self.tie_embedding = False
 
         # Precision
         self.params_dtype = torch.bfloat16

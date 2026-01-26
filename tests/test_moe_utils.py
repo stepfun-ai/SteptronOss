@@ -7,6 +7,8 @@ from steptronoss.model.utils.moe_utils import (
     moe_weighted_gather,
 )
 
+pytestmark = pytest.mark.cpu
+
 
 def test_expert_histogram_basic():
     top_k_rank = torch.tensor([0, 1, 1, 3, 3, 3], dtype=torch.int64)

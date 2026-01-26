@@ -1,9 +1,12 @@
 import random
 
 import numpy as np
+import pytest
 import torch
 
 from steptronoss.core.parallel_state import PM
+
+pytestmark = pytest.mark.cpu
 
 
 def _assert_np_state_equal(left, right):

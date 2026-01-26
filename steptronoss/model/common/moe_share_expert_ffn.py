@@ -1,11 +1,25 @@
 import torch
-from loguru import logger
+from configurize import Ref
 
 # from steptronoss.core.tensor_parallel.layers import new_memory_multiple_paras
 from steptronoss.core.parallel_state import PM
 from steptronoss.model.common.feed_forward import FeedForward, FeedForwardConfig
-from steptronoss.model.common.moe_layers import MoEBlock, MoEConfig
+from steptronoss.model.common.moe_block import MoEBlock, MoEConfig
 from steptronoss.utils.metrics import GlobalMetrics
+
+
+class MoEFeedForwardConfig(FeedForwardConfig):
+    moe_cfg: MoEConfig = Ref("..moe_cfg")
+
+    def build_model(self, layer_id: int):
+        if layer_id in self.moe_cfg.moe_layer_list:
+            return MoeShareExpertFFN(
+                moe_cfg=self.moe_cfg,
+                ffn_cfg=self,
+                layer_id=layer_id,
+            )
+        else:
+            return FeedForward(cfg=self, layer_id=layer_id)
 
 
 class MoeShareExpertFFN(torch.nn.Module):
@@ -49,8 +63,8 @@ class MoeShareExpertFFN(torch.nn.Module):
                     layer_id=layer_id,
                 )
 
-    def forward(self, x, **kwargs):
-        output = self.moe.forward(x)
+    def forward(self, x, recompute: bool = False, **kwargs):
+        output = self.moe.forward(x, recompute=recompute)
 
         GlobalMetrics.shared_routed_avgnorm.add(
             output,
@@ -59,7 +73,7 @@ class MoeShareExpertFFN(torch.nn.Module):
         )
 
         if self.enable_share_expert:
-            share_output = self.share_expert(x)
+            share_output = self.share_expert(x, recompute=recompute)
 
             output = output + share_output
 

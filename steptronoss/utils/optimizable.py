@@ -1,5 +1,6 @@
 from typing import Callable, Optional, TypedDict
 
+import torch
 from loguru import logger
 
 
@@ -11,7 +12,7 @@ class OptimizeMeta(TypedDict):
 OPTIMIZABLE_REGISTER: dict[str, OptimizeMeta] = {}
 
 
-def optimizable(alternatives: dict[str, Callable] = {}):
+def optimizable(alternatives: dict[str, Callable] = None):
     """Mark a callable as 'optimizable', optimized alternatives can be set.
 
     Usage:
@@ -27,12 +28,16 @@ def optimizable(alternatives: dict[str, Callable] = {}):
 
     def wrapper(func: Callable):
         global OPTIMIZABLE_REGISTER
+        nonlocal alternatives
 
         module_name = getattr(func, "__module__", "UnknownModule")
         func_name = getattr(func, "__qualname__", func.__name__)
         reg_name = f"{module_name}.{func_name}"
+
+        func_alters = alternatives or {}
+        func_alters["torch_compile"] = torch.compile(func)
         OPTIMIZABLE_REGISTER[reg_name] = OptimizeMeta(
-            alternatives=alternatives,
+            alternatives=func_alters,
             use_optimize=None,
         )
 

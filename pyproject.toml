@@ -65,6 +65,11 @@ show_error_codes = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "cpu: CPU-only tests",
+    "gpu: GPU-only tests",
+    "node2: requires 2 processes (torchrun --nproc-per-node=2)",
+]
 
 [tool.ruff]
 target-version = "py39"

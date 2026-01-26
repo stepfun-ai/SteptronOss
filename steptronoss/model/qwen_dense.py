@@ -159,29 +159,27 @@ class QwenModel(LlamaLikeModel):
                 block_scripts.append(
                     Script(
                         src=f"{prefix_src}.mlp.experts.*.[gu]*_proj.weight",
-                        op=Inverse(UnbindMoE(moe_key_prefix="experts."))
+                        op=KeepThisEP(moe_key_prefix="experts.")
+                        + Inverse(UnbindMoE(moe_key_prefix="experts."))
                         + FFNMergeGateUp(group="ETP")
                         + KeepThisTP(group="ETP")
-                        + UnbindMoE(moe_key_prefix="experts.")
-                        + KeepThisEP(moe_key_prefix="experts.")
                         + Rename(
-                            f"{prefix_dst}.feed_forward.moe.experts.*.w1.weight: {prefix_src}.mlp.experts.*.gate_up_proj.weight"
+                            f"{prefix_dst}.feed_forward.moe.experts.w1: {prefix_src}.mlp.experts.gate_up_proj.weight"
                         ),
-                        dst=f"{prefix_dst}.feed_forward.moe.experts.*.w1.weight",
+                        dst=f"{prefix_dst}.feed_forward.moe.experts.w1",
                     )
                 )
                 scripts.append(
                     Script(
                         src=f"{prefix_src}.mlp.experts.*.down_proj.weight",
-                        op=Inverse(UnbindMoE(moe_key_prefix="experts."))
+                        op=KeepThisEP(moe_key_prefix="experts.")
+                        + Inverse(UnbindMoE(moe_key_prefix="experts."))
                         + RowParallel(group="ETP")
                         + KeepThisTP(group="ETP")
-                        + UnbindMoE(moe_key_prefix="experts.")
-                        + KeepThisEP(moe_key_prefix="experts.")
                         + Rename(
-                            f"{prefix_dst}.feed_forward.moe.experts.*.w2.weight: {prefix_src}.mlp.experts.*.down_proj.weight"
+                            f"{prefix_dst}.feed_forward.moe.experts.w2: {prefix_src}.mlp.experts.down_proj.weight"
                         ),
-                        dst=f"{prefix_dst}.feed_forward.moe.experts.*.w2.weight",
+                        dst=f"{prefix_dst}.feed_forward.moe.experts.w2",
                     )
                 )
 

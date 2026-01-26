@@ -42,6 +42,7 @@ class FeedForward(torch.nn.Module):
         self.cfg = cfg
 
         self.swiglu_limit = cfg.swiglu_limit
+        self.distribute_saved_activations = cfg.tp_cfg.distribute_saved_activations
 
         self.activation = self.cfg.activation
         self.fuse_activation_w2 = cfg.swiglu_recompute_silu_out_proj
@@ -63,7 +64,13 @@ class FeedForward(torch.nn.Module):
             **self.cfg.tp_cfg.get_tp_kwargs(),
         )
 
-    def forward(self, x, **kwargs) -> torch.FloatTensor:
+    def forward(self, x, recompute=False, **kwargs):
+        if recompute:
+            return tensor_parallel.checkpoint(self._forward, self.distribute_saved_activations, x)
+        else:
+            return self._forward(x)
+
+    def _forward(self, x) -> torch.FloatTensor:
         if self.fuse_activation_w2:
             x = self.w1(x)[0]
             output = self.w2(x)[0]

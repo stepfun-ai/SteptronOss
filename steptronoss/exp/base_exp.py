@@ -545,27 +545,24 @@ class ParallelConfig(AbstractParallelConfig):
         "DP": "(p d t) -> (p t) d",
         "CP": "(p d c t) -> (p d t) c",
         "MP": "(p d t) -> d (p t)",
-        "EP": "(p edp c ep etp) -> (p c edp etp) ep",
-        "ETP": "(p edp c ep etp) -> (p c edp ep) etp",
-        "EETP": "(p edp c ep etp) -> (p c edp) (ep etp)",
-        "EDP": "(p edp c ep etp) -> (p c ep etp) edp",
-        "EMP": "(p edp c ep etp) -> edp (p c ep etp)",
+        "EP": "(p edp ep etp) -> (p edp etp) ep",
+        "ETP": "(p edp ep etp) -> (p edp ep) etp",
+        "EETP": "(p edp ep etp) -> (p edp) (ep etp)",
+        "EDP": "(p edp ep etp) -> (p ep etp) edp",
+        "EMP": "(p edp ep etp) -> edp (p ep etp)",
     }
 
     tensor_model_parallel_size: int = 1
     pipeline_model_parallel_size: int = 1
     expert_model_parallel_size: int = 1
     context_parallel_size: int = 1
-    expert_tensor_parallel_size: int = 1
+    expert_tensor_parallel_size: int = Ref(".tensor_model_parallel_size")
 
     # Not a real parallel
     virtual_pipeline_model_parallel_size: int = 1
 
     def build_parallel(self) -> dict[str, list[list[int]]]:
         from steptronoss.core.parallel_state import PM
-
-        if self.expert_model_parallel_size == 1:
-            self.expert_tensor_parallel_size = self.tensor_model_parallel_size
 
         args = {
             "p": self.pipeline_model_parallel_size,
@@ -578,6 +575,20 @@ class ParallelConfig(AbstractParallelConfig):
         parallel_groups = {k: PM.define_parallel(v, **args) for k, v in self.parallel_definition.items()}
 
         return parallel_groups
+
+    def sanity_check(self):
+        super().sanity_check()
+        world_size = int(os.getenv("WORLD_SIZE", "1"))
+        attn_model_parallel_size = (
+            self.pipeline_model_parallel_size * self.tensor_model_parallel_size * self.context_parallel_size
+        )
+        moe_model_parallel_size = (
+            self.pipeline_model_parallel_size * self.expert_tensor_parallel_size * self.expert_model_parallel_size
+        )
+        assert world_size >= attn_model_parallel_size
+        assert world_size % attn_model_parallel_size == 0
+        assert world_size >= moe_model_parallel_size
+        assert world_size % moe_model_parallel_size == 0
 
 
 class MegatronTPConfig(AbstractModelConfig):

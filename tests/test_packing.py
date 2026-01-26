@@ -1,4 +1,8 @@
+import pytest
+
 from steptronoss.data.packing.non_truncation import PackingResult, pack
+
+pytestmark = pytest.mark.cpu
 
 
 def test_pack_drop_policy():

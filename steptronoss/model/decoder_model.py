@@ -9,6 +9,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from loguru import logger
 
 from steptronoss.core.context_parallel import (
     scatter_to_balanced_cp_region,
@@ -39,7 +40,10 @@ class DecoderLLMConfig(Megatron3DParallelModelConfig):
     hidden_size: int
     layernorm_epsilon: float
     rms_norm_zero_gamma: bool
-    recompute_full: bool
+    recompute: list[str] | bool = []
+    """recompute level for each block, should contains 'attention', 'feed_forward'. Or just set True
+     for all components. Note that manual setting in pp_vp_allocation take higher priority than this attr.
+    """
     tie_embedding: bool
 
     tp_cfg = MegatronTPConfig
@@ -54,7 +58,7 @@ class DecoderLLMConfig(Megatron3DParallelModelConfig):
         # use list_split: [0, 1, 2], split=2 -> [0, 1], [2]
         chunk_layers = len(list_split(range(self.num_layers), get_vpp_size() * PM.size_of("PP"))[abs_pp_rank])
 
-        return [{"recompute": False}] * chunk_layers
+        return [{}] * chunk_layers
 
     def build_layer_map(self):
         layer_map, layer_id = dict(), 0
@@ -66,6 +70,7 @@ class DecoderLLMConfig(Megatron3DParallelModelConfig):
                 per_vp_layers = self.pp_vp_allocation(vp * PM.size_of("PP") + pp)
                 for i in range(len(per_vp_layers)):
                     layer_map[pp][vp][layer_id] = per_vp_layers[i]
+                    layer_map[pp][vp][layer_id].setdefault("recompute", self.recompute)
                     layer_id += 1
         return layer_map
 
@@ -91,6 +96,9 @@ class TransformerBlock(nn.Module):
         self.cfg = cfg
         self.layer_id = layer_id
         self.recompute = recompute
+        if self.recompute is True:
+            self.recompute = ["attention", "feed_forward"]
+        self.distribute_saved_activations = self.cfg.tp_cfg.distribute_saved_activations
         self.sequence_parallel = cfg.tp_cfg.sequence_parallel
 
         # Pre-attention LayerNorm
@@ -124,11 +132,10 @@ class TransformerBlock(nn.Module):
     ) -> torch.Tensor:
         """Forward pass through the transformer block."""
 
-        if self.recompute and self.training:
-            y = self.feed_forward(x)
+        if self.training and "attention" in self.recompute:
             h = x + checkpoint(
-                self._attn_forward,
-                self.cfg.tp_cfg.distribute_saved_activations,
+                self.attention,
+                self.distribute_saved_activations,
                 self.attention_norm(x),
                 cu_seqlens=cu_seqlens,
                 max_seq_len=max_seq_len,
@@ -136,7 +143,7 @@ class TransformerBlock(nn.Module):
                 **kwargs,
             )
         else:
-            h = x + self._attn_forward(
+            h = x + self.attention(
                 self.attention_norm(x),
                 cu_seqlens=cu_seqlens,
                 max_seq_len=max_seq_len,
@@ -144,18 +151,10 @@ class TransformerBlock(nn.Module):
                 **kwargs,
             )
 
-        out = h + self.feed_forward(self.ffn_norm(h))
-        return out
+        # moe should not use recompute for router, so let it handle recompute inside.
+        out = h + self.feed_forward(self.ffn_norm(h), recompute="feed_forward" in self.recompute)
 
-    def _attn_forward(self, x: torch.Tensor, cu_seqlens, max_seq_len, position_id, **kwargs) -> torch.Tensor:
-        """Attention forward pass (can be recomputed)."""
-        return self.attention(
-            x,
-            cu_seqlens=cu_seqlens,
-            max_seq_len=max_seq_len,
-            position_id=position_id,
-            **kwargs,
-        )
+        return out
 
 
 class NoopTransformerBlock(nn.Module):
@@ -183,6 +182,7 @@ class LlamaLikeModel(MegatronModule):
         if layer_map is None:
             layer_map = self._build_default_layer_map()
         self.layer_map = layer_map
+        logger.info(self.layer_map)
 
         # Build model components
         self.layers = self._build_layers()
@@ -209,7 +209,7 @@ class LlamaLikeModel(MegatronModule):
                 layer_map.setdefault(pp, dict())
                 layer_map[pp].setdefault(vp, dict())
                 for i in range(local_layers):
-                    layer_map[pp][vp][layer_id] = dict(recompute=self.cfg.recompute_full)
+                    layer_map[pp][vp][layer_id] = dict(recompute=self.cfg.recompute)
                     layer_id += 1
         return layer_map
 

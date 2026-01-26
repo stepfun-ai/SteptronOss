@@ -1,8 +1,12 @@
+import pytest
+
 from steptronoss.data.samplers.base_sampler import (
     LoopedSequentialSampler,
     LoopedShuffleSampler,
     WeightedRandomSampler,
 )
+
+pytestmark = pytest.mark.cpu
 
 
 def test_looped_sequential_sampler_cycles_and_state():

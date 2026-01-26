@@ -2,7 +2,11 @@ import pytest
 import torch
 import torch.distributed as dist
 
-pytestmark = pytest.mark.xdist_group("torchrun")
+pytestmark = [
+    pytest.mark.xdist_group("torchrun"),
+    pytest.mark.gpu,
+    pytest.mark.node2,
+]
 ops = pytest.importorskip("grouped_gemm.ops")
 
 
@@ -56,7 +60,7 @@ def _set_parallel(tp: int, ep: int):
 @pytest.mark.skipif(not torch.cuda.is_bf16_supported(), reason="bf16 not supported")
 @pytest.mark.parametrize("tp,ep", [(1, 1), (1, 2), (2, 1)])
 def test_moe_share_expert_ffn_backward_reference(monkeypatch, tp, ep):
-    import steptronoss.model.common.moe_layers as moe_layers
+    import steptronoss.model.common.moe_block as moe_block
     from playground.pretrain.qwen3.qwen3_1p7b import Qwen3FeedForwardConfig
     from steptronoss.core.parallel_state import PM
     from steptronoss.exp.base_exp import GradientManagerConfig, MegatronTPConfig
@@ -75,7 +79,7 @@ def test_moe_share_expert_ffn_backward_reference(monkeypatch, tp, ep):
             del name
             return _DummyMetric()
 
-    monkeypatch.setattr(moe_layers, "GlobalMetrics", _DummyGlobalMetrics())
+    monkeypatch.setattr(moe_block, "GlobalMetrics", _DummyGlobalMetrics())
     import steptronoss.model.common.moe_share_expert_ffn as moe_share_expert_ffn
 
     monkeypatch.setattr(moe_share_expert_ffn, "GlobalMetrics", _DummyGlobalMetrics())
@@ -87,7 +91,7 @@ def test_moe_share_expert_ffn_backward_reference(monkeypatch, tp, ep):
     tp_cfg.async_tensor_model_parallel_allreduce = False
     ffn_cfg.tp_cfg = tp_cfg
 
-    moe_cfg = moe_layers.MoEConfig()
+    moe_cfg = moe_block.MoEConfig()
     moe_cfg.tp_cfg = ffn_cfg.tp_cfg
     moe_cfg.hidden_size = ffn_cfg.hidden_size
     moe_cfg.activation = ffn_cfg.activation

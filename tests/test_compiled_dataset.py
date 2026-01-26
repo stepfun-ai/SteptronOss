@@ -4,6 +4,8 @@ from torch.utils.data import Dataset
 
 from steptronoss.data.datasets.compile_dataset import CompiledDataset, compile_dataset
 
+pytestmark = pytest.mark.cpu
+
 
 class ListDataset(Dataset):
     def __init__(self, items: list[dict]) -> None:

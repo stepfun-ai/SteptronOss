@@ -1,6 +1,9 @@
+import pytest
 from torch.utils.data import Dataset
 
 from steptronoss.data.dataloader.packed_dataloader import MixedPackedDataloader
+
+pytestmark = pytest.mark.cpu
 
 
 class SizedDataset(Dataset):

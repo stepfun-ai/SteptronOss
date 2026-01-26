@@ -23,7 +23,7 @@ from .fused_a2a import (
 from .fused_indices_converter import fused_indices_to_multihot
 
 if TYPE_CHECKING:
-    from steptronoss.model.common.moe_layers import MoEConfig
+    from steptronoss.model.common.moe_block import MoEConfig
 
 try:
     import transformer_engine as te  # type: ignore

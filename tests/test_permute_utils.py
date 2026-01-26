@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from steptronoss.model.utils.permute_utils import (
@@ -7,6 +8,8 @@ from steptronoss.model.utils.permute_utils import (
     moe_sort_chunks_by_index_with_probs,
     moe_unpermute,
 )
+
+pytestmark = pytest.mark.cpu
 
 
 def _mask_expected_indices(routing_map: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

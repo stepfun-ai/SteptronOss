@@ -419,7 +419,6 @@ class DecoderPretrainTrainer(BaseTrainer):
     def load_checkpoint(self):
         cfg = self.exp.checkpoint_cfg
 
-        state_dicts = {}
         state_dicts, extra = load_ckpt(cfg.load_path, cfg)
         if cfg.load_option.exp and "exp" in extra:
             self.exp.assert_critical_attrs_expected(extra)

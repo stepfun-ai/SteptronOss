@@ -127,7 +127,7 @@ class Qwen3_8BConfig(DecoderLLMConfig):
         self.hidden_size = 4096
         self.layernorm_epsilon = 1e-6
         self.rms_norm_zero_gamma = False
-        self.recompute_full = False
+        self.recompute = False
         self.tie_embedding = False
 
         # Precision

@@ -2,7 +2,11 @@ import os
 import sys
 import types
 
+import pytest
+
 from steptronoss.exp.base_exp import BaseExp
+
+pytestmark = pytest.mark.cpu
 
 
 class DummyExp(BaseExp):

@@ -120,7 +120,7 @@ def dump_ckpt(
     optimizer=None,
     opt_param_scheduler=None,
     dataloader=None,
-    extra_info: Optional[dict] = None,
+    extra_info: Optional[dict] = {},
 ):
     """
     Async save a model checkpoint. Return the handle of thread or None.
@@ -357,7 +357,7 @@ def load_ckpt(path, cfg: CheckpointConfig) -> tuple[CheckpointDict, dict]:
         cfg.load_option.model = False
 
     if not path:
-        return state_dicts, None
+        return state_dicts, {}
 
     no_optim = not cfg.load_option.optimizer
 
@@ -538,7 +538,7 @@ def load_ckpt(path, cfg: CheckpointConfig) -> tuple[CheckpointDict, dict]:
             "old_dp_size": old_dp_size,
             "old_tp_size": old_tp_size,
             "old_pp_size": old_pp_size,
-            "ckpt_exp": extra_info,
+            # "ckpt_exp": extra_info,
             "strict": getattr(cfg, "reshard_optimizer_strict", True),
         }
     elif cfg.load_option.optimizer and "optimizer" in this_rank_data:

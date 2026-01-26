@@ -7,6 +7,7 @@ from playground.data.sft.reasoning_GCMKSTIDF_sft_stage1_1203_compile_qwen import
     DatasetsConfig,
 )
 from playground.pretrain.qwen3.qwen3_8 import Qwen3_8BConfig_128K_80G
+from playground.pretrain.qwen3.qwen3_30a3b import Qwen3_30A3BConfig
 from steptronoss.exp.base_exp import (
     BaseExp,
     CheckpointConfig,
@@ -117,23 +118,19 @@ class SFTExp(BaseExp):
     metric_cfg: PretrainMetricConfig
     profiler_cfg: ProfilerConfig
 
-    def sanity_check(self):
-        super().sanity_check()
-        world_size = int(os.getenv("WORLD_SIZE", "1"))
-        model_parallel_size = (
-            self.model_cfg.parallel_cfg.pipeline_model_parallel_size
-            * self.model_cfg.parallel_cfg.tensor_model_parallel_size
-            * self.model_cfg.parallel_cfg.expert_model_parallel_size
-        )
-        assert world_size >= model_parallel_size
-        assert world_size % model_parallel_size == 0
+
+import sys
+import time
+
+# sys.excepthook = lambda a, b, c: [print("Hold On Error"), time.sleep(3600)]
 
 
 class Exp(SFTExp):
     log_dir = "./tensorboard_logs/"
 
     trainer_cfg = NTPTrainerConfig
-    model_cfg = Qwen3_8BConfig_128K_80G
+    # model_cfg = Qwen3_8BConfig_128K_80G
+    model_cfg: Qwen3_30A3BConfig = Qwen3_30A3BConfig
     optimizer_cfg = GradientManagerConfig
     scheduler_cfg = SchedulerConfig
     data_cfg = Qwen3_SFT_DataConfig
@@ -151,16 +148,23 @@ class Exp(SFTExp):
         self.trainer_cfg.log_interval = 1
 
         self.checkpoint_cfg.load_option.none(but=["model"])
-        self.checkpoint_cfg.load_safetensors = "/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-8B-Base/"
+        self.checkpoint_cfg.load_safetensors = "/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-30B-A3B-Base"
         self.checkpoint_cfg.save_safetensors = True
         self.checkpoint_cfg.save_dir = "/mnt/shared-storage/tenant/tmp/zhy/tmp/"
         self.checkpoint_cfg.save_option.all()
-        self.checkpoint_cfg.save_interval = 3
+        self.checkpoint_cfg.save_interval = 100
+        self.model_cfg.recompute = True
+        self.optimizer_cfg.use_distributed_optimizer = False
 
     def train(self):
         self.sanity_check()
         trainer_cls = self.trainer_cfg.get_trainer_cls()
         trainer = trainer_cls(exp=self)
+        from steptronoss.utils.optimizable import OPTIMIZABLE_REGISTER
+
+        for k, v in OPTIMIZABLE_REGISTER.items():
+            if "torch_compile" in v["alternatives"]:
+                v["use_optimize"] = "torch_compile"
         trainer.train()
 
 
