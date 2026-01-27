@@ -79,9 +79,7 @@ def pad_tensor(tensor: torch.Tensor, dim: int, to: int, value=0):
     return torch.cat([tensor, padder], dim=dim)
 
 
-def lens_to_cum_len(
-    size_list: list[int] | torch.IntTensor, dtype=None, device=None
-) -> torch.IntTensor:
+def lens_to_cum_len(size_list: list[int] | torch.IntTensor, dtype=None, device=None) -> torch.IntTensor:
     """[3, 5] -> [0, 3, 8]
 
     inverse func of torch.diff() with support of list input
@@ -89,9 +87,7 @@ def lens_to_cum_len(
     if isinstance(size_list, list):
         size_list = torch.tensor([0] + size_list, dtype=dtype, device=device)
     else:
-        size_list = torch.cat(
-            [size_list.new_zeros(1, dtype=dtype, device=device), size_list], 0
-        )
+        size_list = torch.cat([size_list.new_zeros(1, dtype=dtype, device=device), size_list], 0)
     cum_sizes = torch.cumsum(size_list, dim=0, dtype=dtype)
     return cum_sizes
 
@@ -108,15 +104,10 @@ def list_split(data: list[T], split: int) -> list[list[T]]:
     """
     chunk_size = len(data) // split
     extra_data = len(data) % split
-    output = [
-        data[i * chunk_size : i * chunk_size + chunk_size]
-        for i in range(split - extra_data)
-    ]
+    output = [data[i * chunk_size : i * chunk_size + chunk_size] for i in range(split - extra_data)]
     data = data[(split - extra_data) * chunk_size :]
     chunk_size += 1
-    output.extend(
-        [data[i * chunk_size : i * chunk_size + chunk_size] for i in range(extra_data)]
-    )
+    output.extend([data[i * chunk_size : i * chunk_size + chunk_size] for i in range(extra_data)])
     return output
 
 
@@ -133,9 +124,7 @@ def list_split_T(data: list[T], split: int) -> list[list[T]]:
     return [data[i::split] for i in range(split)]
 
 
-def balanced_list_split(
-    data: list[T], sizes: list[int], split: int, number_balance=False
-) -> list[list[T]]:
+def balanced_list_split(data: list[T], sizes: list[int], split: int, number_balance=False) -> list[list[T]]:
     """Greedy, order-agnostic split of `data` into `split` buckets.
 
     Items are processed from largest to smallest `size` and placed in the bucket
@@ -166,9 +155,7 @@ def balanced_list_split(
     return new_data
 
 
-def balanced_list_split_keep_order(
-    data: list[T], sizes: list[int], k: int
-) -> list[list[T]]:
+def balanced_list_split_keep_order(data: list[T], sizes: list[int], k: int) -> list[list[T]]:
     """Split data: list[Any] with size: list[int], minimize max(chunked_size)."""
     assert len(data) == len(sizes)
     n = len(sizes)
@@ -412,9 +399,7 @@ def retry_on(
                 except exceptions as e:
                     last_err = e
                     if try_time >= for_times:
-                        logger.error(
-                            f"{func_name} failed after {for_times} attempts: {e}"
-                        )
+                        logger.error(f"{func_name} failed after {for_times} attempts: {e}")
                         break
                     sleep_for, base_delay, jitter_delay = _compute_sleep(try_time - 1)
                     logger.warning(
@@ -433,9 +418,7 @@ def retry_on(
                 except exceptions as e:
                     last_err = e
                     if try_time >= for_times:
-                        logger.error(
-                            f"{func_name} failed after {for_times} attempts: {e}"
-                        )
+                        logger.error(f"{func_name} failed after {for_times} attempts: {e}")
                         break
                     sleep_for, base_delay, jitter_delay = _compute_sleep(try_time - 1)
                     logger.warning(
@@ -483,7 +466,5 @@ def require_package(package: str):
     required_version = required_version.replace("dev", "")
 
     if version.parse(current_version) < version.parse(required_version):
-        raise RuntimeError(
-            f"{package} >= {required_version} required but got {current_version}!"
-        )
+        raise RuntimeError(f"{package} >= {required_version} required but got {current_version}!")
     return True

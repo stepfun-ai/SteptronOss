@@ -80,9 +80,7 @@ class FlashAttention(nn.Module):
 
         if cu_seqlens is not None:
             # Variable length attention
-            cu_seqlens_q, cu_seqlens_k, max_q_len, max_k_len = parse_cu_seqlens(
-                cu_seqlens, max_seq_len
-            )
+            cu_seqlens_q, cu_seqlens_k, max_q_len, max_k_len = parse_cu_seqlens(cu_seqlens, max_seq_len)
 
             # Reshape for varlen attention: [batch, seq, heads, dim] -> [total, heads, dim]
             q = q.reshape(-1, num_heads, head_dim)

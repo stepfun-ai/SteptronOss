@@ -171,9 +171,7 @@ class Timer(TimerBase):
 
 class DummyTimers:
     @contextmanager
-    def record(
-        self, name, log_level=None, barrier=False, sync_device=False, use_event=None
-    ):
+    def record(self, name, log_level=None, barrier=False, sync_device=False, use_event=None):
         yield
 
     def __call__(self, name, log_level=None, use_event=None):
@@ -196,9 +194,7 @@ class LocalTimers(DummyTimers):
         # set it to the max log level which is 2.
         if log_level is None:
             log_level = self._log_levels.get(name, self._max_log_level)
-        assert (
-            log_level <= self._max_log_level
-        ), "log level {} is larger than max supported log level {}".format(
+        assert log_level <= self._max_log_level, "log level {} is larger than max supported log level {}".format(
             log_level, self._max_log_level
         )
         # Now if the input log level is larger than the one set for
@@ -210,19 +206,16 @@ class LocalTimers(DummyTimers):
         # is provided, it matches the one that the timer was created with.
         if name in self._timers:
             if log_level is not None:
-                assert log_level == self._log_levels[name], (
-                    "input log level {} does not match already existing "
-                    "log level {} for {} timer".format(
-                        log_level, self._log_levels[name], name
-                    )
+                assert (
+                    log_level == self._log_levels[name]
+                ), "input log level {} does not match already existing " "log level {} for {} timer".format(
+                    log_level, self._log_levels[name], name
                 )
             return self._timers[name]
 
         # Otherwise, initalize the timer and set the level.
         use_event = (
-            False
-            if log_level < 0
-            else (self._use_event if use_event is None else use_event)
+            False if log_level < 0 else (self._use_event if use_event is None else use_event)
         )  # iter-time disable event
         self._timers[name] = Timer(name, use_event)
         self._log_levels[name] = log_level
@@ -232,9 +225,7 @@ class LocalTimers(DummyTimers):
         """Report only min and max times across all ranks."""
 
         torch.cuda.synchronize()  # synchronize events
-        all_elapsed_times = {
-            k: (v.elapsed(reset=reset) / normalizer) for k, v in self._timers.items()
-        }
+        all_elapsed_times = {k: (v.elapsed(reset=reset) / normalizer) for k, v in self._timers.items()}
         all_elapsed_times = dict(
             filter(
                 lambda x: (self._log_levels[x[0]] >= 0 and x[1] > 0),
@@ -245,9 +236,7 @@ class LocalTimers(DummyTimers):
         return all_elapsed_times
 
     @contextmanager
-    def record(
-        self, name, log_level=None, barrier=False, sync_device=False, use_event=None
-    ):
+    def record(self, name, log_level=None, barrier=False, sync_device=False, use_event=None):
         timer = self(name, log_level, use_event=use_event)
         timer.start(barrier=barrier, sync_device=sync_device)
         yield
@@ -318,19 +307,17 @@ class timeit(_DecoratorContextManager):
         return super().__call__(orig_func)
 
     def __enter__(self) -> None:
-        GLOBAL_TIMERS(
-            self.name, log_level=self.log_level, use_event=self.use_event
-        ).start(barrier=self.barrier, sync_device=self.sync_device)
+        GLOBAL_TIMERS(self.name, log_level=self.log_level, use_event=self.use_event).start(
+            barrier=self.barrier, sync_device=self.sync_device
+        )
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
-        GLOBAL_TIMERS(
-            self.name, log_level=self.log_level, use_event=self.use_event
-        ).stop(barrier=self.barrier, sync_device=self.sync_device)
+        GLOBAL_TIMERS(self.name, log_level=self.log_level, use_event=self.use_event).stop(
+            barrier=self.barrier, sync_device=self.sync_device
+        )
 
     def clone(self) -> "timeit":
-        return self.__class__(
-            self.name, self.log_level, self.barrier, self.sync_device, self.use_event
-        )
+        return self.__class__(self.name, self.log_level, self.barrier, self.sync_device, self.use_event)
 
 
 def get_timers() -> LocalTimers:
@@ -341,7 +328,5 @@ def get_timers() -> LocalTimers:
 def init_timers(config: ProfilerConfig):
     global GLOBAL_TIMERS
     if isinstance(GLOBAL_TIMERS, DummyTimers):
-        GLOBAL_TIMERS = LocalTimers(
-            config.timing_log_level, use_event=config.timing_use_event
-        )
+        GLOBAL_TIMERS = LocalTimers(config.timing_log_level, use_event=config.timing_use_event)
     return GLOBAL_TIMERS

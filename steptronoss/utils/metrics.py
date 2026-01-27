@@ -102,10 +102,7 @@ class BaseMetric:
         self.data = defaultdict(list) if self.is_group else []
 
     def __repr__(self):
-        reductions = ".".join(
-            f"{x[0]}({x[1]})" if isinstance(x, tuple) else repr(x)
-            for x in self.reductions
-        )
+        reductions = ".".join(f"{x[0]}({x[1]})" if isinstance(x, tuple) else repr(x) for x in self.reductions)
         rep = f"{self.__class__.__name__}({self.name}).{reductions}"
         if not self.enabled:
             rep = "🚫 " + rep
@@ -140,9 +137,7 @@ class BaseMetric:
 class Metric(BaseMetric):
     DEFAULT_REDUCTIONS = []
 
-    def __init__(
-        self, name=None, reductions=None, sample_interval=1, is_group=False
-    ) -> None:
+    def __init__(self, name=None, reductions=None, sample_interval=1, is_group=False) -> None:
         self.name = name
         if reductions is None:
             # logger.warning(f"Registered metric {name} with default reductions.")
@@ -238,9 +233,7 @@ class Metric(BaseMetric):
                 group = RDims._get_group(dim)
                 dist_op = ROps._get_dist_op(op)
                 if op == ROps.mean:
-                    counter = torch.tensor(
-                        data.nelement(), device=torch.cuda.current_device()
-                    )
+                    counter = torch.tensor(data.nelement(), device=torch.cuda.current_device())
                     dist.all_reduce(counter, op=dist.ReduceOp.SUM, group=group)
                     data /= counter
                 dist.all_reduce(data, op=dist_op, group=group)
@@ -306,9 +299,7 @@ class AvgMetric(BaseMetric):
         return self
 
     def add(self, value: float | int):
-        assert isinstance(
-            value, (float, int)
-        ), "AvgMetric only supports float or int values"
+        assert isinstance(value, (float, int)), "AvgMetric only supports float or int values"
         self.data.append(value)
 
     def _reduce_list(self, data: list[torch.Tensor] | torch.Tensor):
@@ -382,10 +373,7 @@ class PercentageMetric(BaseMetric):
         group = RDims._get_group(dim)
 
         # convert defaultdict to dict for gather
-        data = {
-            k: {kk: vv for kk, vv in v.items()} if isinstance(v, defaultdict) else v
-            for k, v in data.items()
-        }
+        data = {k: {kk: vv for kk, vv in v.items()} if isinstance(v, defaultdict) else v for k, v in data.items()}
         gathered_data = all_gather_object(data, group=group)
         sumed = defaultdict(lambda: defaultdict(float))
         for d in gathered_data:
@@ -402,9 +390,7 @@ class PercentageMetric(BaseMetric):
             for metric_name, v in subclass_data.items():
                 if subclass_name == "":
                     # for metric name without subclass, subclass_name is empty string
-                    results[metric_name] = torch.tensor(
-                        v / v_all[subclass_name], dtype=torch.float
-                    )
+                    results[metric_name] = torch.tensor(v / v_all[subclass_name], dtype=torch.float)
                 else:
                     results[f"{metric_name}/{subclass_name}"] = torch.tensor(
                         v / v_all[subclass_name], dtype=torch.float
@@ -420,9 +406,7 @@ class PercentageMetric(BaseMetric):
 
 
 class HistogramMetric(BaseMetric):
-    def __init__(
-        self, name=None, reductions=None, sample_interval=1, is_group=False
-    ) -> None:
+    def __init__(self, name=None, reductions=None, sample_interval=1, is_group=False) -> None:
         super().__init__(
             name=name,
             reductions=reductions,
@@ -437,9 +421,7 @@ class HistogramMetric(BaseMetric):
             if not torch.is_tensor(value):
                 value = torch.tensor(value, device="cpu")
             if value.requires_grad:
-                logger.warning(
-                    f"Adding Metric [{self.name}] with un-detached tensor, fix your code to avoid mem-leak!"
-                )
+                logger.warning(f"Adding Metric [{self.name}] with un-detached tensor, fix your code to avoid mem-leak!")
                 value = value.detach()
             value = value.cpu()
             self.data.append(value)
@@ -606,18 +588,12 @@ class TextMetric(BaseMetric):
         # Per rank save size according to
         sample_per_rank = len(data)
         global_samples = all_gather_object(sample_per_rank, group=group)
-        per_rank_size = (
-            int(self.max_record_texts / max(sum(global_samples), 1) * len(data)) + 1
-        )
+        per_rank_size = int(self.max_record_texts / max(sum(global_samples), 1) * len(data)) + 1
         # Calculate the number of data to save for each rank
         num_data_to_save = min(len(data), per_rank_size)
 
         # Save the data for each rank
-        data_to_save = (
-            np.random.RandomState(42)
-            .choice(data, num_data_to_save, replace=False)
-            .tolist()
-        )
+        data_to_save = np.random.RandomState(42).choice(data, num_data_to_save, replace=False).tolist()
 
         # Gather the data from all ranks
         gathered_data = all_gather_object(data_to_save, group=group)
@@ -661,17 +637,13 @@ class WithDataDumpOutlierMetric(BaseMetric):
         # mkdir in rank0
         if PM.world_rank == 0:
             os.makedirs(self.output_dir, exist_ok=True)
-            logger.info(
-                f"Created output directory for outlier data dump: {self.output_dir}"
-            )
+            logger.info(f"Created output directory for outlier data dump: {self.output_dir}")
 
     def add(self, value: dict, subname=None, iop=lambda x: x):
         """
         iop is for entire value
         """
-        assert (
-            subname is None
-        ), "WithDataDumpOutlierMetric does not support subname for now"
+        assert subname is None, "WithDataDumpOutlierMetric does not support subname for now"
         match value:
             case {"real_value": _, "data": _}:
                 value = iop(value)
@@ -705,9 +677,7 @@ class WithDataDumpOutlierMetric(BaseMetric):
             if real_value_item > history_values_mean:
                 dump_path = os.path.join(self.output_dir, f"{mean_value_item}.pt")
                 torch.save(data_item, dump_path)
-                logger.info(
-                    f"Dumped data for outlier losses: {real_value_item} to {dump_path}"
-                )
+                logger.info(f"Dumped data for outlier losses: {real_value_item} to {dump_path}")
                 res += 1
         return res
 

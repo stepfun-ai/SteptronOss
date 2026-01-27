@@ -82,9 +82,7 @@ def translate(pat):
                             del chunks[k]
                     # Escape backslashes and hyphens for set difference (--).
                     # Hyphens that create ranges shouldn't be escaped.
-                    stuff = "-".join(
-                        s.replace("\\", r"\\").replace("-", r"\-") for s in chunks
-                    )
+                    stuff = "-".join(s.replace("\\", r"\\").replace("-", r"\-") for s in chunks)
                 # Escape set operations (&&, ~~ and ||).
                 stuff = re.sub(r"([&~|])", r"\\\1", stuff)
                 i = j + 1
@@ -209,9 +207,7 @@ class HFWeights(dict):
             for k, v in data.items():
                 self[k] = v
 
-    def export(
-        self, indicator: list[str] | str | dict[str, Is | Cat]
-    ) -> dict[str, torch.Tensor]:
+    def export(self, indicator: list[str] | str | dict[str, Is | Cat]) -> dict[str, torch.Tensor]:
         """Export the state_dict to new naming. An naming indicator is required.
 
         Args:
@@ -230,9 +226,7 @@ class HFWeights(dict):
         """
         if not isinstance(indicator, dict):
             indicator = parse_indicator_from_str(indicator)
-        patterns = [
-            translate(x.ref_name) for x in indicator.values() if isinstance(x, Is)
-        ]
+        patterns = [translate(x.ref_name) for x in indicator.values() if isinstance(x, Is)]
         ops = [x.op for x in indicator.values() if isinstance(x, Is)]
         keys = [k for k, v in indicator.items() if isinstance(v, Is)]
         out = {}
@@ -300,9 +294,7 @@ class HFWeights(dict):
             if buffer_size and (buffer_size + v_size > shard_max_size):
                 full_path = join(path, file_name)
                 save_file(buffer, full_path)
-                logger.info(
-                    f"{convert_num(buffer_size, G=True)} data dumped to {full_path}"
-                )
+                logger.info(f"{convert_num(buffer_size, G=True)} data dumped to {full_path}")
                 buffer.clear()
                 buffer_size = 0
                 shard_idx += 1
@@ -316,9 +308,7 @@ class HFWeights(dict):
         if buffer_size:
             full_path = join(path, file_name)
             save_file(buffer, full_path)
-            logger.info(
-                f"{convert_num(buffer_size, G=True)} data dumped to {full_path}"
-            )
+            logger.info(f"{convert_num(buffer_size, G=True)} data dumped to {full_path}")
             buffer.clear()
             buffer_size = 0
 

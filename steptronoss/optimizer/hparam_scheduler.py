@@ -106,9 +106,7 @@ class CosineFuncWithReWarmup(object):
         self.start_bias = start_bias
         if self.re_warmup > 0:
             self.start_token = start_token
-            assert (
-                start_token > start_bias
-            ), "WARNING start_token must greater than start_bias"
+            assert start_token > start_bias, "WARNING start_token must greater than start_bias"
             self.re_warmup_end = self.re_warmup + self.start_token
             self.re_warmup_max = max(
                 (
@@ -127,15 +125,9 @@ class CosineFuncWithReWarmup(object):
             self.re_warmup_min = max(re_warmup_min, 0)
 
     @staticmethod
-    def cal_decay(
-        x: int, warmup: int = 0, end: int = 0, clip_min: float = 0, start_bias: int = 0
-    ):
+    def cal_decay(x: int, warmup: int = 0, end: int = 0, clip_min: float = 0, start_bias: int = 0):
         if warmup and x < warmup:
-            return (
-                max(0, (x - start_bias) / (warmup - start_bias))
-                if warmup > start_bias
-                else 0
-            )
+            return max(0, (x - start_bias) / (warmup - start_bias)) if warmup > start_bias else 0
         else:
             decay_progress = min((x - warmup) / (end - warmup), 1)
             cos_decay = 0.5 * (1.0 + math.cos(math.pi * decay_progress))
@@ -177,12 +169,8 @@ class Scheduler(object):
         self.base_lr = base_lr
         self.base_wd = base_wd
 
-        assert isinstance(
-            lr_func, Callable
-        ), "lr_func should be a Callable [f(int) -> float]"
-        assert isinstance(
-            wd_func, Callable
-        ), "wd_func should be a Callable [f(int) -> float]"
+        assert isinstance(lr_func, Callable), "lr_func should be a Callable [f(int) -> float]"
+        assert isinstance(wd_func, Callable), "wd_func should be a Callable [f(int) -> float]"
         self.lr_func = lr_func
         self.wd_func = wd_func
 

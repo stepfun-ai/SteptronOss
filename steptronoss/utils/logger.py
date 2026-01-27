@@ -58,9 +58,7 @@ class LoggerHijack:
             elif isinstance(at_control, int):
                 self.allow_stderr = self._rank == (at_control % self._world_size)
             elif isinstance(at_control, list):
-                self.allow_stderr = self._rank in [
-                    i % self._world_size for i in at_control
-                ]
+                self.allow_stderr = self._rank in [i % self._world_size for i in at_control]
             elif at_control == "all":
                 self.allow_stderr = True
             else:
@@ -133,10 +131,7 @@ class StepWriter:
         # backward compatible
         if isinstance(self.default_backends, str):
             self.default_backends = [self.default_backends]
-        if (
-            not isinstance(self.default_backends, list)
-            or len(self.default_backends) == 0
-        ):
+        if not isinstance(self.default_backends, list) or len(self.default_backends) == 0:
             raise ValueError(
                 f"default_backends must be a non-empty list, got {type(self.default_backends)}: {self.default_backends}. "
                 f"Check init_metrics_server call in remote_metrics.py"

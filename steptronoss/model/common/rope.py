@@ -85,9 +85,7 @@ class YARNRoPE(torch.nn.Module):
         self._cached_seqlen = -1
         self._cos_cache: Tensor
         self._sin_cache: Tensor
-        self._check_set_cos_sin_cache(
-            self.max_position_embeddings or 8192, torch.device("cpu")
-        )
+        self._check_set_cos_sin_cache(self.max_position_embeddings or 8192, torch.device("cpu"))
 
     @staticmethod
     def ref1(x: Tensor, theta: float):
@@ -128,20 +126,8 @@ class YARNRoPE(torch.nn.Module):
         base_freqs = 1 / (theta ** ropen_linspace(0, 1, Cv))  # C / 2
         ntk_freqs = base_freqs / ntk_ratio  # lower freqencies
 
-        d_left = math.floor(
-            Cv
-            * (
-                math.log((S / beta_fast) / (2 * math.pi))
-                / math.log(theta)  # theta ~ S / (2 * pi)
-            )
-        )
-        d_right = math.ceil(
-            Cv
-            * (
-                math.log((S / beta_slow) / (2 * math.pi))
-                / math.log(theta)  # theta ~ S / (2 * pi)
-            )
-        )
+        d_left = math.floor(Cv * (math.log((S / beta_fast) / (2 * math.pi)) / math.log(theta)))  # theta ~ S / (2 * pi)
+        d_right = math.ceil(Cv * (math.log((S / beta_slow) / (2 * math.pi)) / math.log(theta)))  # theta ~ S / (2 * pi)
         d_left, d_right = max(0, d_left), min(Cv, d_right)
         # weight: [0, 0, 0, 0.3, 0.6, 0.9, 1, 1, 1]
         ntk_weight = ((torch.arange(Cv) - d_left) / (d_right - d_left)).clamp(0, 1)
@@ -182,8 +168,7 @@ class YARNRoPE(torch.nn.Module):
         ntk_freqs = base_freqs / ntk_ratio  # lower freqencies
 
         ntk_weight = (
-            (S / (2 * math.pi / base_freqs) - self.yarn_beta_slow)
-            / (self.yarn_beta_fast - self.yarn_beta_slow)
+            (S / (2 * math.pi / base_freqs) - self.yarn_beta_slow) / (self.yarn_beta_fast - self.yarn_beta_slow)
         ).clamp(0, 1)
         # use ntk only on low freq (right)
         yarn_freqs = base_freqs * ntk_weight + ntk_freqs * (1 - ntk_weight)
@@ -193,9 +178,7 @@ class YARNRoPE(torch.nn.Module):
     def _check_set_cos_sin_cache(self, cur_seqlen, device):
         if cur_seqlen > self._cached_seqlen:
             frequencies = self._get_frequencies(device=device)
-            angles = torch.outer(
-                torch.arange(cur_seqlen, device=device), frequencies
-            )  # S, C / 2
+            angles = torch.outer(torch.arange(cur_seqlen, device=device), frequencies)  # S, C / 2
             repeated_angles = angles.repeat([1, 2])
             cos = repeated_angles.cos()
             sin = repeated_angles.sin()
@@ -219,33 +202,19 @@ class YARNRoPE(torch.nn.Module):
 
         if position_id is not None:  # packed sample
             max_seqlen = feature.shape[1]
-            cos_cache, sin_cache = self._check_set_cos_sin_cache(
-                max_seqlen, position_id.device
-            )
-            cos = (
-                cos_cache[None, position_id, None, :]
-                .to(feature.device)
-                .to(feature.dtype)
-            )
-            sin = (
-                sin_cache[None, position_id, None, :]
-                .to(feature.device)
-                .to(feature.dtype)
-            )
+            cos_cache, sin_cache = self._check_set_cos_sin_cache(max_seqlen, position_id.device)
+            cos = cos_cache[None, position_id, None, :].to(feature.device).to(feature.dtype)
+            sin = sin_cache[None, position_id, None, :].to(feature.device).to(feature.dtype)
         else:  # no packing
             max_seqlen = feature.shape[1]
-            cos_cache, sin_cache = self._check_set_cos_sin_cache(
-                max_seqlen, feature.device
-            )
+            cos_cache, sin_cache = self._check_set_cos_sin_cache(max_seqlen, feature.device)
             cos = cos_cache[None, :max_seqlen, None, :].to(feature.device)
             sin = sin_cache[None, :max_seqlen, None, :].to(feature.device)
 
         if self.use_adjacent_pair:
             # rotate to adjacent
             b, s, h, c = feature.shape
-            feature = (
-                feature.view(b, s, h, c // 2, 2).transpose(4, 3).reshape(b, s, h, c)
-            )
+            feature = feature.view(b, s, h, c // 2, 2).transpose(4, 3).reshape(b, s, h, c)
 
         dtype = feature.dtype
         feature = feature.to(torch.float32)

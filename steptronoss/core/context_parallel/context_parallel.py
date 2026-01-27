@@ -3,8 +3,6 @@ import torch.nn.functional as F
 from torch import distributed as dist
 
 from steptronoss.core.parallel_state import PM
-
-
 from steptronoss.utils import lens_to_cum_len
 
 
@@ -15,9 +13,7 @@ def _gather_along_first_dim(input_):
         return input_
     dim_size = list(input_.size())
     dim_size[0] = dim_size[0] * world_size
-    output = torch.zeros(
-        dim_size, dtype=input_.dtype, device=torch.cuda.current_device()
-    )
+    output = torch.zeros(dim_size, dtype=input_.dtype, device=torch.cuda.current_device())
     dist.all_gather_into_tensor(output, input_.contiguous(), group=PM.group_of("CP"))
     return output
 
@@ -28,13 +24,9 @@ def _reduce_scatter_along_first_dim(input_):
     if world_size == 1:
         return input_
     dim_size = list(input_.size())
-    assert (
-        dim_size[0] % world_size == 0
-    ), "First dimension of the tensor should be divisible by tensor parallel size"
+    assert dim_size[0] % world_size == 0, "First dimension of the tensor should be divisible by tensor parallel size"
     dim_size[0] = dim_size[0] // world_size
-    output = torch.empty(
-        dim_size, dtype=input_.dtype, device=torch.cuda.current_device()
-    )
+    output = torch.empty(dim_size, dtype=input_.dtype, device=torch.cuda.current_device())
     dist.reduce_scatter_tensor(output, input_.contiguous(), group=PM.group_of("CP"))
     return output
 
@@ -74,9 +66,7 @@ def cu_seqlens_to_balanced_cp(cu_seqlens: torch.IntTensor, cp_rank: int, cp_size
     assert packed_len % cp_size == 0, "seqlen not divisible by cp size"
     assert sum(seq_lens) == packed_len, "incorrect cu_seqlens"
 
-    def get_pieces(
-        cum_lens: list[int], split: int
-    ) -> tuple[list[list[int]], list[list[int]]]:
+    def get_pieces(cum_lens: list[int], split: int) -> tuple[list[list[int]], list[list[int]]]:
         """[0, 3, 8] -> [[3, 1], [4]], [[0, 1], [1]]
         cu_seqlens -> piece_sizes, piece_ids
         """
@@ -108,22 +98,14 @@ def cu_seqlens_to_balanced_cp(cu_seqlens: torch.IntTensor, cp_rank: int, cp_size
         assert first_piece_left_boundary <= cp_left_boundary
 
         q_range = cp_left_boundary, cp_right_boundary
-        cu_seqlens_q = lens_to_cum_len(
-            q_lens, dtype=cu_seqlens.dtype, device=cu_seqlens.device
-        )
-        max_len_q = max(
-            q_lens
-        )  # this is max_len of actual piece, count before make negative
-        cu_seqlens_q[0] += (
-            first_piece_left_boundary - cp_left_boundary
-        )  # make it negative, for PosEmb
+        cu_seqlens_q = lens_to_cum_len(q_lens, dtype=cu_seqlens.dtype, device=cu_seqlens.device)
+        max_len_q = max(q_lens)  # this is max_len of actual piece, count before make negative
+        cu_seqlens_q[0] += first_piece_left_boundary - cp_left_boundary  # make it negative, for PosEmb
 
         k_range = first_piece_left_boundary, cp_right_boundary
         # Retrieve the full length of the first piece
         q_lens[0] += cp_left_boundary - first_piece_left_boundary
-        cu_seqlens_k = lens_to_cum_len(
-            q_lens, dtype=cu_seqlens.dtype, device=cu_seqlens.device
-        )
+        cu_seqlens_k = lens_to_cum_len(q_lens, dtype=cu_seqlens.dtype, device=cu_seqlens.device)
         max_len_k = max(q_lens)
         # cu_seqlens_k[0] += first_piece_left_boundary - first_piece_left_boundary # nothing happens for this
         return q_range, cu_seqlens_q, max_len_q, k_range, cu_seqlens_k, max_len_k

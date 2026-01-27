@@ -74,9 +74,7 @@ def _get_tensor_info(tensors):
         return tensors
 
 
-def _convert_tensor(
-    tensors, rank, src_rank, inp_tensor_obj: T, group, move_to_cuda=False
-) -> T:
+def _convert_tensor(tensors, rank, src_rank, inp_tensor_obj: T, group, move_to_cuda=False) -> T:
     if isinstance(tensors, dict):
         new_obj = {
             k: _convert_tensor(
@@ -96,14 +94,10 @@ def _convert_tensor(
     elif isinstance(tensors, tuple) and tensors[0] == "@@tensor_info":
         _, shape, dtype, is_cuda = tensors
         if rank != src_rank:
-            _tensor = torch.empty(
-                shape, dtype=dtype, device=torch.cuda.current_device()
-            )
+            _tensor = torch.empty(shape, dtype=dtype, device=torch.cuda.current_device())
         else:
             # _tensor = inp_tensor_obj.to(torch.cuda.current_device(), non_blocking=True)
-            _tensor = inp_tensor_obj.to(
-                torch.cuda.current_device(), non_blocking=True
-            ).contiguous()
+            _tensor = inp_tensor_obj.to(torch.cuda.current_device(), non_blocking=True).contiguous()
         torch.distributed.broadcast(_tensor, src=src_rank, group=group)
         if not is_cuda and not move_to_cuda:
             _tensor = _tensor.to("cpu")
@@ -145,9 +139,7 @@ def _convert_tensor(
         return tensors
 
 
-def broadcast_tensors(
-    inp_tensor_obj: T, src_rank, group, move_to_cuda=False, direct=False
-) -> T:
+def broadcast_tensors(inp_tensor_obj: T, src_rank, group, move_to_cuda=False, direct=False) -> T:
     """This function work just like broadcast_object_list, with acceleration for tensors
     and won't cause device mismatch.
     from huhp: This function broadcast any object and accelerate Tensor broadcast
@@ -169,16 +161,12 @@ def broadcast_tensors(
     torch.distributed.broadcast_object_list(tensor_info, src=src_rank, group=group)
     tensor_info = tensor_info[0]
 
-    ret_tensor_dict = _convert_tensor(
-        tensor_info, rank, src_rank, inp_tensor_obj, group, move_to_cuda
-    )
+    ret_tensor_dict = _convert_tensor(tensor_info, rank, src_rank, inp_tensor_obj, group, move_to_cuda)
 
     return ret_tensor_dict
 
 
-def all_to_all_tensors(
-    tensors: list[torch.Tensor], group, dtype, device, async_op=False
-):
+def all_to_all_tensors(tensors: list[torch.Tensor], group, dtype, device, async_op=False):
     group_size = torch.distributed.get_world_size(group)
     group_rank = torch.distributed.get_rank(group)
     assert len(tensors) == group_size
@@ -189,9 +177,7 @@ def all_to_all_tensors(
     for info in all_tensor_infos:
         shape = info[group_rank]
         recv_tensors.append(torch.empty(shape, dtype=dtype, device=device))
-    handle = torch.distributed.all_to_all(
-        recv_tensors, tensors, group=group, async_op=async_op
-    )
+    handle = torch.distributed.all_to_all(recv_tensors, tensors, group=group, async_op=async_op)
     if async_op:
         return handle, recv_tensors
     return recv_tensors
@@ -222,9 +208,7 @@ def all_to_all_objects(objects: list, group=None):
     return objects
 
 
-def dict_to_tensor(
-    obj: dict[str, torch.Tensor], comm_device: torch.device
-) -> torch.Tensor:
+def dict_to_tensor(obj: dict[str, torch.Tensor], comm_device: torch.device) -> torch.Tensor:
     """
     将一个包含各种torch.Tensor的字典打包成一个单一的torch.uint8张量，优化内存使用。
     这个张量包含了所有元数据（键、原始dtype、原始shape、原始device）和实际的张量数据。
@@ -287,9 +271,7 @@ def dict_to_tensor(
 
         original_shape_list = list(tensor_val.shape)
 
-        overall_metadata_list.append(
-            (key, original_dtype_id, original_shape_list, original_device_str)
-        )
+        overall_metadata_list.append((key, original_dtype_id, original_shape_list, original_device_str))
 
         # 确保Tensor是连续的，以进行可靠的view操作
         tensor_contig = tensor_val.contiguous()
@@ -303,9 +285,7 @@ def dict_to_tensor(
         else:
             # 如果不在通信设备上，则将其uint8视图复制到通信设备
             # non_blocking=True 可以在有独立复制队列的硬件上提供性能优势
-            data_uint8_views_on_comm_device.append(
-                uint8_view_on_source_device.to(comm_device, non_blocking=True)
-            )
+            data_uint8_views_on_comm_device.append(uint8_view_on_source_device.to(comm_device, non_blocking=True))
 
         # 及时释放对原始tensor_val 和 tensor_contig 的引用，如果它们很大且不再需要
         del tensor_val
@@ -314,25 +294,17 @@ def dict_to_tensor(
     # 2. 序列化元数据 (在CPU上完成，结果很小，然后复制到comm_device)
     pickled_metadata_bytes = pickle.dumps(overall_metadata_list)
     # torch.frombuffer 会创建一个CPU tensor
-    pickled_metadata_tensor_cpu = torch.frombuffer(
-        pickled_metadata_bytes, dtype=torch.uint8
-    )
-    pickled_metadata_on_comm_device = pickled_metadata_tensor_cpu.to(
-        comm_device, non_blocking=True
-    )
+    pickled_metadata_tensor_cpu = torch.frombuffer(pickled_metadata_bytes, dtype=torch.uint8)
+    pickled_metadata_on_comm_device = pickled_metadata_tensor_cpu.to(comm_device, non_blocking=True)
     del pickled_metadata_tensor_cpu  # 释放CPU副本
 
     # 3. 创建头部 (在CPU上完成，结果很小，然后复制到comm_device)
     len_meta_bytes = len(pickled_metadata_on_comm_device)
     len_data_bytes = sum(t.numel() for t in data_uint8_views_on_comm_device)
 
-    header_tensor_int64_cpu = torch.tensor(
-        [len_meta_bytes, len_data_bytes], dtype=torch.int64, device="cpu"
-    )
+    header_tensor_int64_cpu = torch.tensor([len_meta_bytes, len_data_bytes], dtype=torch.int64, device="cpu")
     # .numpy().tobytes() 是获取底层字节的标准方式
-    header_uint8_tensor_cpu = torch.frombuffer(
-        header_tensor_int64_cpu.numpy().tobytes(), dtype=torch.uint8
-    )
+    header_uint8_tensor_cpu = torch.frombuffer(header_tensor_int64_cpu.numpy().tobytes(), dtype=torch.uint8)
     header_on_comm_device = header_uint8_tensor_cpu.to(comm_device, non_blocking=True)
     del header_tensor_int64_cpu, header_uint8_tensor_cpu  # 释放CPU副本
 
@@ -355,9 +327,7 @@ def dict_to_tensor(
     return final_packed_tensor
 
 
-def tensor_to_dict(
-    flat_byte_tensor_on_comm_device: torch.Tensor, keep_on_comm_device: bool = False
-) -> dict:
+def tensor_to_dict(flat_byte_tensor_on_comm_device: torch.Tensor, keep_on_comm_device: bool = False) -> dict:
     """
     将由 dict_to_tensor 打包的单一torch.uint8张量解包还原为原始的字典，优化内存使用。
     扁平张量在 comm_device (通常是GPU) 上。如果 keep_on_comm_device=True，则恢复的张量会留在通信设备上，否则会根据原始设备字符串恢复到CPU或GPU。
@@ -382,9 +352,7 @@ def tensor_to_dict(
     # 2. 提取并反序列化元数据 (从comm_device复制小块元数据到CPU进行unpickle)
     meta_start_idx = 16
     meta_end_idx = meta_start_idx + len_pickled_meta
-    pickled_metadata_on_comm_device = flat_byte_tensor_on_comm_device[
-        meta_start_idx:meta_end_idx
-    ]
+    pickled_metadata_on_comm_device = flat_byte_tensor_on_comm_device[meta_start_idx:meta_end_idx]
     # .numpy().tobytes() 同样是为了frombuffer
     pickled_metadata_bytes_cpu = pickled_metadata_on_comm_device.cpu().numpy().tobytes()
     overall_metadata_list = pickle.loads(pickled_metadata_bytes_cpu)
@@ -400,13 +368,9 @@ def tensor_to_dict(
     for key, dtype_id, shape, original_device_str in overall_metadata_list:
         original_dtype = _id_to_dtype(dtype_id)
         if original_dtype == UNSUPPORTED_DTYPE:  # 在_id_to_dtype中未找到
-            raise ValueError(
-                f"Unknown dtype_id {dtype_id} for key '{key}' during deserialization."
-            )
+            raise ValueError(f"Unknown dtype_id {dtype_id} for key '{key}' during deserialization.")
 
-        target_device = (
-            comm_device if keep_on_comm_device else torch.device(original_device_str)
-        )
+        target_device = comm_device if keep_on_comm_device else torch.device(original_device_str)
 
         # 计算当前Tensor的字节数
         num_elements = np.prod(shape) if shape else 1  # 标量shape=[] prod为1
@@ -421,9 +385,7 @@ def tensor_to_dict(
                 try:
                     element_size = torch.tensor([], dtype=original_dtype).itemsize
                 except RuntimeError:
-                    raise ValueError(
-                        f"Could not determine element size for dtype {original_dtype}"
-                    )
+                    raise ValueError(f"Could not determine element size for dtype {original_dtype}")
             num_bytes_for_current_tensor = num_elements * element_size
 
         # 从comm_device上的扁平张量中获取当前Tensor的字节数据视图 (仍然在comm_device上)
@@ -436,21 +398,13 @@ def tensor_to_dict(
         ]
 
         # 根据target_device决定如何重建
-        current_reconstruction_shape = (
-            shape if shape else ()
-        )  # torch.empty需要()表示标量
+        current_reconstruction_shape = shape if shape else ()  # torch.empty需要()表示标量
 
-        if (
-            num_bytes_for_current_tensor == 0
-        ):  # 处理0字节Tensor (例如 shape=[0, N] 或特定空标量)
-            reconstructed_tensor = torch.empty(
-                current_reconstruction_shape, dtype=original_dtype, device=target_device
-            )
+        if num_bytes_for_current_tensor == 0:  # 处理0字节Tensor (例如 shape=[0, N] 或特定空标量)
+            reconstructed_tensor = torch.empty(current_reconstruction_shape, dtype=original_dtype, device=target_device)
         else:
             # 直接在目标设备上创建最终的空Tensor
-            reconstructed_tensor = torch.empty(
-                current_reconstruction_shape, dtype=original_dtype, device=target_device
-            )
+            reconstructed_tensor = torch.empty(current_reconstruction_shape, dtype=original_dtype, device=target_device)
 
             if reconstructed_tensor.numel() > 0:  # 只有当目标Tensor有元素时才执行复制
                 # 获取目标Tensor存储的uint8视图
@@ -460,12 +414,8 @@ def tensor_to_dict(
                 # 如果target_device与comm_device不同，.to(target_device)会执行一次数据拷贝
                 # 否则，如果相同，则是一次设备内拷贝
                 # :target_uint8_view.numel()确保只复制所需字节数
-                source_bytes_for_copy = current_tensor_bytes_on_comm_device_view.to(
-                    target_device, non_blocking=True
-                )
-                target_uint8_view.copy_(
-                    source_bytes_for_copy[: target_uint8_view.numel()]
-                )
+                source_bytes_for_copy = current_tensor_bytes_on_comm_device_view.to(target_device, non_blocking=True)
+                target_uint8_view.copy_(source_bytes_for_copy[: target_uint8_view.numel()])
                 del source_bytes_for_copy  # 如果发生了拷贝，释放这个中间拷贝
 
         reconstructed_dict[key] = reconstructed_tensor
@@ -483,9 +433,7 @@ def tensor_to_dict(
 def all_to_all_dicts(objs: list[dict[str, torch.Tensor]], group, device):
     comm_dtype = torch.uint8  # `dtype` from arg is ignored
     obj_tensors = [dict_to_tensor(obj, comm_device=device) for obj in objs]
-    recv_tensors = all_to_all_tensors(
-        obj_tensors, group=group, dtype=comm_dtype, device=device
-    )
+    recv_tensors = all_to_all_tensors(obj_tensors, group=group, dtype=comm_dtype, device=device)
     objs = [tensor_to_dict(tensor, keep_on_comm_device=True) for tensor in recv_tensors]
     return objs
 
@@ -560,9 +508,7 @@ def redistributed_tp(
     repeated_state_dicts += [{}] * (world_size - len(repeated_state_dicts))
 
     # repeated_state_dicts = splited_state_dict * tgt_dp_size
-    all_rank_dicts = all_to_all_dicts(
-        repeated_state_dicts, group, device=device
-    )  # len = world
+    all_rank_dicts = all_to_all_dicts(repeated_state_dicts, group, device=device)  # len = world
     output = {}
     for data in all_rank_dicts:
         output.update(data)
@@ -604,9 +550,7 @@ def all_gather_dict(
     sizes = _all_gather_sizes(size_tensor, group=group)
     max_size = max(sizes) if sizes else 0
     if packed.numel() < max_size:
-        pad = torch.empty(
-            max_size - packed.numel(), device=comm_device, dtype=packed.dtype
-        )
+        pad = torch.empty(max_size - packed.numel(), device=comm_device, dtype=packed.dtype)
         packed = torch.cat([packed, pad], dim=0)
     recv_tensors = [
         torch.empty(max_size, device=comm_device, dtype=packed.dtype)
@@ -635,9 +579,7 @@ def gather_dict(
     sizes = _all_gather_sizes(size_tensor, group=group)
     max_size = max(sizes) if sizes else 0
     if packed.numel() < max_size:
-        pad = torch.empty(
-            max_size - packed.numel(), device=comm_device, dtype=packed.dtype
-        )
+        pad = torch.empty(max_size - packed.numel(), device=comm_device, dtype=packed.dtype)
         packed = torch.cat([packed, pad], dim=0)
     global_rank = torch.distributed.get_rank()
     dst_global = torch.distributed.get_global_rank(group, dst)
@@ -647,9 +589,7 @@ def gather_dict(
             torch.empty(max_size, device=comm_device, dtype=packed.dtype)
             for _ in range(torch.distributed.get_world_size(group))
         ]
-    torch.distributed.gather(
-        packed, gather_list=gather_list, dst=dst_global, group=group
-    )
+    torch.distributed.gather(packed, gather_list=gather_list, dst=dst_global, group=group)
     if global_rank != dst_global:
         return None
     return [
@@ -701,10 +641,7 @@ def list_balance(data: list, group=None) -> tuple[list, tuple]:
     actual_ids = data_ids.split(all_data_len)
     balanced_ids = list_split_T(data_ids, len(all_data_len))
 
-    send = [
-        [data[k] for k, j in enumerate(actual_ids[rank]) if j in balanced_ids[i]]
-        for i in range(world_size)
-    ]
+    send = [[data[k] for k, j in enumerate(actual_ids[rank]) if j in balanced_ids[i]] for i in range(world_size)]
     send = recur_to(send, "cpu")
     balanced_data = sum(all_to_all_objects(send, group=group), [])
     return balanced_data, (actual_ids, balanced_ids, group)
@@ -721,12 +658,7 @@ def list_unbalance(balanced_data: list, restore_info: tuple) -> list:
     world_size = torch.distributed.get_world_size(group)
 
     send = [
-        [
-            balanced_data[k]
-            for k, j in enumerate(balanced_ids[rank])
-            if j in actual_ids[i]
-        ]
-        for i in range(world_size)
+        [balanced_data[k] for k, j in enumerate(balanced_ids[rank]) if j in actual_ids[i]] for i in range(world_size)
     ]
     send = recur_to(send, "cpu")
     restored_data = sum(all_to_all_objects(send, group=group), [])
@@ -771,9 +703,7 @@ def recv_obj(src, group):
     return recur_to(object, "cuda")
 
 
-def pack_tensors(
-    tensors_dict: dict, names: List[str]
-) -> Tuple[torch.Tensor, torch.Tensor]:
+def pack_tensors(tensors_dict: dict, names: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
     """将不同数据类型的tensors打包为bytes tensor
 
     Args:
@@ -794,9 +724,7 @@ def pack_tensors(
         if value is None:
             continue
         if not torch.is_tensor(value):
-            assert isinstance(
-                value, int
-            ), f"The value of key {key} must be int, but got {type(value)}:{value}"
+            assert isinstance(value, int), f"The value of key {key} must be int, but got {type(value)}:{value}"
             tensors_dict[key] = torch.tensor([value], dtype=torch.int64, device="cuda")
 
     for name in names:
@@ -818,31 +746,17 @@ def pack_tensors(
 
         # 直接转换为bytes tensor
         nbytes = tensor.numel() * tensor.element_size()
-        data_chunks.append(
-            tensor.contiguous()
-            .clone()
-            .cuda()  # 确保在GPU上
-            .view(torch.uint8)
-            .reshape(nbytes)
-        )
+        data_chunks.append(tensor.contiguous().clone().cuda().view(torch.uint8).reshape(nbytes))  # 确保在GPU上
 
     # 打包shapes和dtypes信息
-    shapes_and_dtypes = torch.tensor(
-        shapes_and_dtypes, dtype=torch.int64, device="cuda"
-    )
+    shapes_and_dtypes = torch.tensor(shapes_and_dtypes, dtype=torch.int64, device="cuda")
 
     # 打包数据为bytes tensor
-    packed_data = (
-        torch.cat(data_chunks)
-        if data_chunks
-        else torch.empty(0, dtype=torch.uint8, device="cuda")
-    )
+    packed_data = torch.cat(data_chunks) if data_chunks else torch.empty(0, dtype=torch.uint8, device="cuda")
     return shapes_and_dtypes, packed_data
 
 
-def unpack_tensors(
-    shapes_and_dtypes: torch.Tensor, packed_data: torch.Tensor, names: List[str]
-) -> dict:
+def unpack_tensors(shapes_and_dtypes: torch.Tensor, packed_data: torch.Tensor, names: List[str]) -> dict:
     """从bytes解包出不同数据类型的tensors
 
     Args:
@@ -918,9 +832,7 @@ def recv_tensors(names: List[str], src: int, group=None) -> dict:
     return tensors_dict
 
 
-def send_tensors(
-    tensors_dict: dict, dst: int, group=None
-) -> List[torch.distributed.Work]:
+def send_tensors(tensors_dict: dict, dst: int, group=None) -> List[torch.distributed.Work]:
     """异步发送多个不同数据类型的tensor"""
     # 确保所有int类型数据都转换为tensor
     names = list(tensors_dict.keys())

@@ -49,11 +49,7 @@ class RMSNorm(nn.Module):
         self.use_fp32 = use_fp32
         self.use_zero_init = use_zero_init
 
-        self.weight = (
-            nn.Parameter(torch.ones(dim))
-            if not use_zero_init
-            else nn.Parameter(torch.zeros(dim))
-        )
+        self.weight = nn.Parameter(torch.ones(dim)) if not use_zero_init else nn.Parameter(torch.zeros(dim))
         self.bias = 0 if not use_zero_init else 1
         setattr(self.weight, "sequence_parallel", self.sequence_parallel)
 
