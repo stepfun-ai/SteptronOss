@@ -44,6 +44,8 @@ dev = [
     "megfile",
     "msgpack",
     "tabulate",
+    "redis",
+    "fastapi",
 ]
 
 [build-system]
