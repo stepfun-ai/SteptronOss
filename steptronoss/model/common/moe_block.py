@@ -88,11 +88,11 @@ class MoEConfig(Config):
     """Update rate for router_balance_bias in aux-loss-free load balancing."""
     moe_enable_deepep: bool
     """Enable DeepEP expert-parallel dispatch when EP > 1."""
-    moe_deepep_num_sms: int
-    """Number of SMs reserved for DeepEP kernels/dispatcher."""
+    # moe_deepep_num_sms: int
+    # """Number of SMs reserved for DeepEP kernels/dispatcher."""
 
-    fuse_moescatter_and_moecolumn: bool
-    """Enable fused scatter+column expert kernel path when available."""
+    # fuse_moescatter_and_moecolumn: bool
+    # """Enable fused scatter+column expert kernel path when available."""
     enable_auxiliary_loss_free_load_balance: bool
     """Track local tokens and apply router_balance_bias for load balancing."""
     norm_expert_weight: bool

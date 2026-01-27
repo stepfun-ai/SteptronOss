@@ -12,7 +12,7 @@ from steptronoss.core import parallel_state as mpu
 from steptronoss.core import tensor_parallel
 from steptronoss.core.parallel_state import PM, get_vpp_size, set_vpp_rank
 from steptronoss.core.trainers.base_trainer import BaseTrainer
-from steptronoss.exp.base_exp import DataConfig, ModelConfig
+from steptronoss.exp.base_exp import DataConfig, Megatron3DParallelModelConfig
 from steptronoss.exp.ntp import PretrainExp, PretrainMetricConfig
 from steptronoss.initialize import mtp_initialize, set_mpu_random_seed
 
@@ -326,7 +326,7 @@ class DecoderPretrainTrainer(BaseTrainer):
             logger.info(log_string, at=-1)
 
     # Builders:
-    def setup_model(self, model_config: ModelConfig) -> torch.nn.ModuleList:
+    def setup_model(self, model_config: Megatron3DParallelModelConfig) -> torch.nn.ModuleList:
         """Build the model by calling the build_model func in exp file."""
 
         # Build model.

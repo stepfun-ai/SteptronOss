@@ -10,12 +10,12 @@ from playground.pretrain.qwen3.qwen3_8 import Qwen3_8BConfig_128K_80G
 from playground.pretrain.qwen3.qwen3_30a3b import Qwen3_30A3BConfig
 from steptronoss.exp.base_exp import (
     BaseExp,
-    CheckpointConfig,
     GradientManagerConfig,
     Megatron3DParallelModelConfig,
     ProfilerConfig,
-    SchedulerConfig,
 )
+from steptronoss.exp.checkpointing import CheckpointConfig, ConstantCheckpointConfig
+from steptronoss.exp.lr_schedulers import ConstantSchedulerConfig, SchedulerConfig
 from steptronoss.exp.ntp import NTPTrainerConfig, PretrainMetricConfig
 from steptronoss.exp.sft import SFTDataConfig
 
@@ -129,17 +129,17 @@ class Exp(SFTExp):
     log_dir = "./tensorboard_logs/"
 
     trainer_cfg = NTPTrainerConfig
-    # model_cfg = Qwen3_8BConfig_128K_80G
-    model_cfg: Qwen3_30A3BConfig = Qwen3_30A3BConfig
-    optimizer_cfg = GradientManagerConfig
-    scheduler_cfg = SchedulerConfig
+    model_cfg = Qwen3_8BConfig_128K_80G
+    # model_cfg: Qwen3_30A3BConfig = Qwen3_30A3BConfig
+    optimizer_cfg: GradientManagerConfig = GradientManagerConfig
+    scheduler_cfg = ConstantSchedulerConfig
     data_cfg = Qwen3_SFT_DataConfig
-    checkpoint_cfg = CheckpointConfig
+    checkpoint_cfg = ConstantCheckpointConfig
     metric_cfg = PretrainMetricConfig
     profiler_cfg = ProfilerConfig
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
         self.trainer_cfg.micro_batch_size = 1
         self.trainer_cfg.global_batch_size = 8
         self.trainer_cfg.global_seq_length = 65536
@@ -157,6 +157,7 @@ class Exp(SFTExp):
         self.optimizer_cfg.use_distributed_optimizer = False
 
     def train(self):
+        self.update_from_args()
         self.sanity_check()
         trainer_cls = self.trainer_cfg.get_trainer_cls()
         trainer = trainer_cls(exp=self)

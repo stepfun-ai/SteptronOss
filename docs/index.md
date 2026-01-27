@@ -6,3 +6,9 @@
 [![License](https://img.shields.io/github/license/Randomizez/SteptronOss)](https://img.shields.io/github/license/Randomizez/SteptronOss)
 
 This is a template repository for Python projects that use uv for their dependency management.
+
+## Runtime environment
+
+The distributed helpers rely on a shared filesystem path for rendezvous when bringing up
+per-experiment Redis servers. Set `STEPTRON_MEET_DIR` to a directory that is visible to
+all participating nodes.

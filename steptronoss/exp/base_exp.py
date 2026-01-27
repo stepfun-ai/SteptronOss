@@ -3,22 +3,29 @@ from __future__ import annotations
 import copy
 import os
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Callable, ForwardRef, Iterable, Iterator, Literal, NoReturn, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ForwardRef,
+    Iterable,
+    Iterator,
+    Literal,
+    NoReturn,
+    Optional,
+)
 
 import torch
-import torch.distributed
 from configurize import Config, Ref, writable_property
 from loguru import logger
 from torch import Tensor
-from torch.nn import Module, Parameter
 
 from steptronoss.exp.abstract import MetricConfig as AbstractMetricConfig
 from steptronoss.exp.abstract import ModelConfig as AbstractModelConfig
-from steptronoss.exp.abstract import OptimizerConfig as AbstractOptimizerConfig
 from steptronoss.exp.abstract import ParallelConfig as AbstractParallelConfig
-from steptronoss.exp.abstract import SchedulerConfig as AbstractSchedulerConfig
 from steptronoss.exp.abstract import TokenizerConfig as AbstractTokenizerConfig
 from steptronoss.exp.abstract import TrainerConfig as AbstractTrainerConfig
+from steptronoss.exp.optimizer import AdamConfig, OptimizerConfig
 
 if TYPE_CHECKING:
     from steptronoss.core.pipeline_parallel.schedules import FWBWScheduler
@@ -30,93 +37,8 @@ def is_log_rank() -> bool:
     return int(os.getenv("RANK", "0")) == 0
 
 
-class OptimizerConfig(AbstractOptimizerConfig):
-
-    weight_decay: float = 0.01
-    weight_decay_on_1d_params: bool = False
-
-    lr: float = Ref("...scheduler_cfg.lr")
-
-    weight_decay: float = Ref("...scheduler_cfg.weight_decay")
-
-    # adam-specific hyperparams
-    adam_eps: float = 1e-8
-    adam_beta1: float = 0.9
-    adam_beta2: float = 0.95
-
-    # muon-specific hyperparams
-    # muon_matched_adamw_rms: float = 0.2
-    # muon_momentum: float = 0.95
-    # muon_nesterov: bool = True
-    # muon_ns_steps: int = 5
-    # muon_newtonschulz_fn: str = "polar_express"
-    # muon_run_ns_in_fp32: bool = False
-    # muon_run_ns_in_fp16: bool = True
-    # muon_log_updates_grad_norms: bool = False
-    # muon_batch_compute_mem_size: int = 128 * 1024 * 1024
-    # muon_auto_applier_attn_pack_param_strategy: str = "split_by_type"
-    # muon_auto_applier_glu_pack_param_strategy: str = "split_by_type"
-
-    def scale_lr_func(self, name: str, param: Parameter) -> float:
-        if hasattr(param, "_lr_scale"):
-            return param._lr_scale
-        return 1.0
-
-    def scale_wd_cond(self, name: str, param: Parameter) -> float:
-        if name.endswith(".bias") or (len(param.shape) == 1 and not self.weight_decay_on_1d_params):
-            return 0.0
-        return 1.0
-
-    def build_optimizer(self, model: Module) -> torch.optim.Optimizer:
-        # Base optimizer.
-        from torch.optim.adam import Adam
-
-        from steptronoss.optimizer.utils import advanced_get_param_groups
-        from steptronoss.utils import convert_num
-
-        param_groups = advanced_get_param_groups(
-            model,
-            scale_lr_cond=self.scale_lr_func,
-            scale_wd_cond=self.scale_wd_cond,
-        )
-
-        for idx, group in enumerate(param_groups):
-            extra = "; ".join([f"{k}: {v}" for k, v in group.items() if k != "params"])
-            logger.info(
-                f"Optim group {idx} -> # params: "
-                f"{convert_num(sum([p.nelement() for p in group['params']]))}; "
-                f"{extra}"
-            )
-
-        return Adam(
-            param_groups,
-            lr=self.lr,
-            weight_decay=self.weight_decay,
-            betas=(self.adam_beta1, self.adam_beta2),
-            eps=self.adam_eps,
-        )
-
-    def sanity_check(self) -> None:
-        super().sanity_check()
-        # if self.optimizer == "muon":
-        #     assert int(self.muon_run_ns_in_fp16) + int(self.muon_run_ns_in_fp32) <= 1
-
-        #     if self.muon_log_updates_grad_norms:
-        #         assert self.log_detailed_grad_norms
-
-        #     assert self.muon_auto_applier_attn_pack_param_strategy in [
-        #         "split_by_head",
-        #         "split_by_type",
-        #         "no_split",
-        #     ]
-        #     assert self.muon_auto_applier_glu_pack_param_strategy in [
-        #         "split_by_type",
-        #         "no_split",
-        #     ]
-
-
 class GradientManagerConfig(Config):
-    optimizer_cfg = OptimizerConfig
+    optimizer_cfg: OptimizerConfig = AdamConfig
 
     params_dtype: torch.dtype = Ref("..model_cfg.params_dtype")
 
@@ -154,49 +76,6 @@ class GradientManagerConfig(Config):
             return AccInFP32GradientManager(cfg=self, model=model, optimizer=optimizer)
 
 
-class SchedulerConfig(AbstractSchedulerConfig):
-
-    lr: float = 1e-4
-    """Initial learning rate. Depending on decay style and initial warmup,
-    the learing rate at each iteration would be different."""
-
-    min_lr: float = 0.0
-    """Minumum value for learning rate. The scheduler clip values below this threshold."""
-
-    weight_decay: float = 0.01
-    """Weight decay coefficient for L2 regularization."""
-
-    total_schedule: float = 1000
-    """Scheduled count for lr scheduler"""
-
-    warmup_schedule: float = 100
-    """Scheduled count for warm up"""
-
-    scheduler_unit: Literal["iter", "sample", "token"] = "iter"
-    """How to update scheduler counter ('iter'|'sample'|'token')"""
-
-    def sanity_check(self) -> None:
-        assert self.min_lr <= self.lr
-        assert self.scheduler_unit in ["iter", "sample", "token"]
-
-    def build_scheduler(self, optimizer: Any, *args: Any) -> Any:
-        from steptronoss.optimizer.hparam_scheduler import FuncConstant, Scheduler
-
-        scheduler = Scheduler(
-            optimizer=optimizer,
-            base_lr=self.lr,
-            base_wd=self.weight_decay,
-            lr_func=FuncConstant(
-                n=self.total_schedule,
-                warmup=self.warmup_schedule,
-                min_scale=self.min_lr / self.lr,
-            ),
-            wd_func=lambda x: 1.0,  # constant is ok
-        )
-
-        return scheduler
-
-
 class MetricConfig(AbstractMetricConfig):
     _allow_set_new_attr: bool = True
 
@@ -209,8 +88,8 @@ class MetricConfig(AbstractMetricConfig):
 
         GlobalMetrics.batch_register(self)
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self) -> None:
+        super().__init__()
         from steptronoss.utils.metrics import GradNormMetric, Metric
 
         self.consumed_tokens = Metric().sum("time").sum("dp")
@@ -456,88 +335,6 @@ class TokenizerConfig(AbstractTokenizerConfig):
         pass
 
 
-class SaveOptions(Config):
-    """Option Config, use True for load
-
-    options.none(but=['model']) for load model only
-
-    options.all(but=['optimizer']) for NOT load optimizer only.
-    """
-
-    model: bool = True
-    optimizer: bool = True
-    scheduler: bool = True
-    data: bool = True
-    rng_state: bool = True
-
-    def all(self, but: list[str] = []) -> "SaveOptions":
-        for k, _ in self.items():
-            setattr(self, k, k not in but)
-        return self
-
-    def none(self, but: list[str] = []) -> "SaveOptions":
-        for k, _ in self.items():
-            setattr(self, k, k in but)
-        return self
-
-
-class LoadOptions(SaveOptions):
-    model: bool = True
-    optimizer: bool = True
-    scheduler: bool = True
-    data: bool = True
-    exp: bool = True
-    iter: bool = True
-    rng_state: bool = True
-
-
-class CheckpointConfig(Config):
-    auto_resume: bool = True
-
-    load_path: Optional[str] = None
-
-    save_dir: str = "./"
-
-    save_interval: int = 100
-
-    async_dump: bool = True
-
-    load_option: type[LoadOptions] = LoadOptions
-    load_safetensors: bool | str = False
-    """Load weight from safetensors. If True, load 'load_path/hf'; if str, load the value."""
-
-    save_option: type[SaveOptions] = SaveOptions
-    save_safetensors: bool = False
-    """If set, dump an extra hf weight to 'save_path/hf'"""
-
-    broadcast_from_dp0: bool = True
-
-    strict_load_model: bool = True
-
-    use_distributed_optimizer: bool = Ref("..optimizer_cfg.use_distributed_optimizer", False)
-
-    exp_name: str = Ref("..exp_name", "")
-
-    # Enable online reshard of distributed optimizer state when DP size changes.
-    reshard_optimizer_state: bool = False
-    reshard_optimizer_strict: bool = True
-
-    # for save_safetensors reference
-    model_config_path: Optional[str] = None
-
-    tokenizer_path: Optional[str] = None
-
-    @writable_property
-    def save_path(self) -> str:
-        return os.path.join(self.save_dir, self.exp_name)
-
-    def sanity_check(self) -> None:
-        super().sanity_check()
-        assert not (
-            self.load_safetensors and self.load_path
-        ), "load_safetensors and load_path cannot be set at the same time"
-
-
 class ParallelConfig(AbstractParallelConfig):
     parallel_definition: dict[str, str] = {
         "TP": "(p d t) -> (p d) t",
@@ -621,7 +418,6 @@ class MegatronPPModelConfig(AbstractModelConfig):
     check_nan: bool = True
     """check nan on every rank"""
 
-    gradient_accumulation_fusion: bool = True
     fp32_residual_connection: bool = False
 
     def get_pp_scheduler(self) -> FWBWScheduler:
@@ -658,165 +454,6 @@ class Megatron3DParallelModelConfig(MegatronPPModelConfig):
     def pp_comm_shape(self):
         seq_length = self.global_seq_length // self.parallel_cfg.context_parallel_size
         return (seq_length, self.micro_batch_size, self.hidden_size)
-
-
-class RoPEConfig(Config):
-
-    rope_type: str = "llama3"
-    factor: float = Ref("..ntk_interp_ratio", 1.0)
-    original_max_position_embeddings: int = Ref("..max_position_embeddings", None)
-    low_freq_factor: float = Ref("..yarn_beta_slow", None)
-    high_freq_factor: float = Ref("..yarn_beta_fast", None)
-
-    def sanity_check(self):
-        super().sanity_check()
-        assert self.rope_type in ["llama3"]
-        if self.factor != 1:
-            assert isinstance(self.original_max_position_embeddings, int)
-            assert isinstance(self.low_freq_factor, float)
-            assert isinstance(self.high_freq_factor, float)
-
-
-class ModelConfig(Megatron3DParallelModelConfig):
-    _allow_search = True
-    critical_keys = ["hidden_size", "ffn_hidden_size", "rope_theta"]
-
-    vocab_size: int = Ref("..tokenizer_cfg.padded_vocab_size", 65536)
-    actual_vocab_size: int = Ref("..tokenizer_cfg.vocab_size", None)
-
-    hidden_size: int = 12288
-    ffn_hidden_size: int = 31232
-    num_layers: int = 12
-    num_attention_heads: int = 96
-    num_sliding_attention_heads: int = None  # 如果为 None 则使用 num_attention_heads
-
-    use_headwise_attn_gate: bool = False
-    sliding_window_size: int = -1
-    layer_types: list[str] = None
-
-    @writable_property
-    def head_dim(self):
-        if self.mfa_kv_channels is not None:
-            return self.mfa_kv_channels
-        return self.hidden_size // self.num_attention_heads
-
-    qk_rope_head_dim: int | list[int] = None
-    """head_dim of rope, if not set, use head_dim; if list[int], different for each layer."""
-
-    num_attention_groups: int = 8
-    attention_type: str = "gqa"
-    """Attention Type: one of ['gqa', 'mfa']"""
-    mfa_q_channels: int = Ref(".mfa_kv_channels")
-    mfa_kv_channels: int = None
-    mfa_use_inter_norm = False
-    rope_theta: float | list[float] = 500_000.0
-    """theta in RoPE, if list, different for each layer."""
-
-    rms_norm_zero_gamma: bool = False
-    layernorm_epsilon: float = 1e-05
-    attention_dropout: float = 0.0
-
-    # moe_cfg = MoEConfig
-
-    use_vpp_v2 = False
-    gather_output = False
-
-    # Simple Optimization
-    recompute_granularity: str = None
-    recompute_num_layers: int = 0
-    recompute_pre_mlp_layernorm: bool = False
-    recompute_attention_layernorm: bool = False
-    recompute_qknorm_rope: bool = False  # 添加这一行
-    recompute_cp_kv: bool = False
-    recompute_logits: bool = False
-    continuous_memory_ffn: bool = False
-    use_fused_qknorm_and_rope: bool | list[bool] = False
-
-    detect_abnormal_data: bool = False
-
-    # precisions
-    fp32_lm_head_out: bool = False
-    fp32_residual_connection: bool = False
-    fp32_rms_norm: bool = True
-    use_optimus_rope: bool = False
-
-    # rope
-    rope_cfg = RoPEConfig
-
-    yarn_beta_fast: float = 32.0
-    yarn_beta_slow: float = 1.0
-    ntk_interp_ratio: float = 1.0
-    max_position_embeddings: int = None
-
-    disable_qk_norm: bool = False
-    use_qkv_bias: bool = False
-
-    # WARNING: FOR EXPERT ONLY
-
-    swiglu_recompute_silu_out_proj: bool = True
-
-    # for clip sliu
-
-    use_swiglu_limit: float | list[float] = None
-    use_swiglu_limit_shared: float | list[float] = None
-
-    # For muon
-    muon_auto_applier_attn_pack_param_strategy = Ref("..optimizer_cfg.muon_auto_applier_attn_pack_param_strategy")
-    muon_auto_applier_glu_pack_param_strategy = Ref("..optimizer_cfg.muon_auto_applier_glu_pack_param_strategy")
-
-    def build_model(self):
-        raise NotImplementedError
-
-    def sanity_check(self):
-        assert self.attention_type in ["gqa", "mfa"]
-        if self.layer_types:
-            assert len(self.layer_types) == self.num_layers
-        if self.moe_cfg.use_moe:
-            assert self.moe_cfg.moe_num_experts % self.parallel_cfg.expert_model_parallel_size == 0
-            assert self.moe_cfg.moe_top_k <= self.moe_cfg.moe_num_experts
-            if self.parallel_cfg.expert_model_parallel_size > 1 and self.moe_cfg.moe_enable_group_gemm:
-                assert self.moe_cfg.moe_enable_deepep, (
-                    "When expert_model_parallel_size > 1, grouped gemm(moe_enable_group_gemm=True) "
-                    "requires DeepEP, set moe_enable_deepep to True"
-                )
-            if self.moe_cfg.moe_enable_deepep:
-                assert self.parallel_cfg.expert_model_parallel_size > 1, (
-                    "DeepEP requires expert model parallel size > 1, set expert_model_parallel_size "
-                    "larger than 1 or disable DeepEP by setting moe_enable_deepep to False"
-                )
-        else:
-            assert self.parallel_cfg.expert_model_parallel_size == 1
-
-        if self.fp32_residual_connection:
-            assert self.params_dtype in [
-                torch.float16,
-                torch.bfloat16,
-            ], "residual connection in fp32 only supported when using fp16 or bf16."  # noqa
-
-        if self.distribute_saved_activations:
-            assert self.parallel_cfg.tensor_model_parallel_size > 1, (
-                "can distribute " "recomputed activations only across tensor model " "parallel groups"
-            )
-            assert self.recompute_granularity == "full", (
-                "distributed recompute activations is only " "application to full recompute granularity"
-            )
-        if self.parallel_cfg.tensor_model_parallel_size == 1:
-            assert self.sequence_parallel == False
-
-        if self.sequence_parallel:
-            assert self.async_tensor_model_parallel_allreduce == False
-
-        if os.getenv("CUDA_DEVICE_MAX_CONNECTIONS", None) != "1":
-            assert not self.sequence_parallel, (
-                "Using sequence parallelism requires setting the environment variable "
-                "CUDA_DEVICE_MAX_CONNECTIONS to 1"
-            )
-            assert not self.async_tensor_model_parallel_allreduce, (
-                "Using async gradient all reduce requires setting the environment "
-                "variable CUDA_DEVICE_MAX_CONNECTIONS to 1"
-            )
-        assert isinstance(self.rope_theta, (float, list)), "rope_theta must be float!"
-        super().sanity_check()
 
 
 class DataConfig(Config):

@@ -13,8 +13,8 @@ from steptronoss.model.decoder_model import DecoderLLMConfig
 class Qwen3AttentionConfig(AttentionConfig):
     """Qwen3 attention configuration."""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
         self.causal = True
         self.attention_dropout = 0.0
 
@@ -49,8 +49,8 @@ class Qwen3AttentionConfig(AttentionConfig):
 class Qwen3FeedForwardConfig(FeedForwardConfig):
     """Qwen3 feed-forward configuration."""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
         self.recompute_granularity = None
 
         self.hidden_size = 2048
@@ -66,8 +66,8 @@ class Qwen3FeedForwardConfig(FeedForwardConfig):
 class Qwen3InputEmbeddingConfig(InputEmbeddingConfig):
     """Qwen3 input embedding configuration."""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
         self.vocab_size = 151936
         self.hidden_size = 2048
         self.embedding_weights_in_fp32 = False
@@ -77,8 +77,8 @@ class Qwen3InputEmbeddingConfig(InputEmbeddingConfig):
 class Qwen3OutputEmbeddingConfig(OutputEmbeddingConfig):
     """Qwen3 output embedding configuration."""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
         self.vocab_size = 151936
         self.hidden_size = 2048
         self.fp32_rms_norm = True
@@ -92,8 +92,8 @@ class Qwen3OutputEmbeddingConfig(OutputEmbeddingConfig):
 class Qwen3ParallelConfig(ParallelConfig):
     """Qwen3 parallelism configuration."""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
         self.tensor_model_parallel_size = 2
         self.pipeline_model_parallel_size = 1
         self.virtual_pipeline_model_parallel_size = 1
@@ -120,8 +120,8 @@ class Qwen3_1p7BConfig(DecoderLLMConfig):
     out_embed_cfg = Qwen3OutputEmbeddingConfig
     parallel_cfg = Qwen3ParallelConfig
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
         # Model architecture
         self.num_layers = 28
         self.hidden_size = 2048

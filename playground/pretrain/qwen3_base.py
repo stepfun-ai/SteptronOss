@@ -10,8 +10,8 @@ class Exp(BaseExp):
     grad_manager_cfg = GradientManagerConfig
     trainer_cfg = NTPTrainerConfig
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
         self.grad_manager_cfg.optimizer_cfg.lr = 1
         self.grad_manager_cfg.optimizer_cfg.weight_decay = 0.9
         self.grad_manager_cfg.clip_grad = 0.0

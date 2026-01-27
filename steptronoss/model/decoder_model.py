@@ -41,8 +41,9 @@ class DecoderLLMConfig(Megatron3DParallelModelConfig):
     layernorm_epsilon: float
     rms_norm_zero_gamma: bool
     recompute: list[str] | bool = []
-    """recompute level for each block, should contains 'attention', 'feed_forward'. Or just set True
-     for all components. Note that manual setting in pp_vp_allocation take higher priority than this attr.
+    """Recompute level for each block.
+    Values may include: 'attention', 'attn_norm', 'feed_forward', 'ffn_norm'.
+    Set True to recompute all components. Manual pp_vp_allocation overrides this attr.
     """
     tie_embedding: bool
 
@@ -97,7 +98,7 @@ class TransformerBlock(nn.Module):
         self.layer_id = layer_id
         self.recompute = recompute
         if self.recompute is True:
-            self.recompute = ["attention", "feed_forward"]
+            self.recompute = ["attention", "attn_norm", "feed_forward", "ffn_norm"]
         self.distribute_saved_activations = self.cfg.tp_cfg.distribute_saved_activations
         self.sequence_parallel = cfg.tp_cfg.sequence_parallel
 
@@ -132,11 +133,16 @@ class TransformerBlock(nn.Module):
     ) -> torch.Tensor:
         """Forward pass through the transformer block."""
 
+        if self.training and "attn_norm" in self.recompute:
+            attn_in = checkpoint(self.attention_norm, self.distribute_saved_activations, x)
+        else:
+            attn_in = self.attention_norm(x)
+
         if self.training and "attention" in self.recompute:
             h = x + checkpoint(
                 self.attention,
                 self.distribute_saved_activations,
-                self.attention_norm(x),
+                attn_in,
                 cu_seqlens=cu_seqlens,
                 max_seq_len=max_seq_len,
                 position_id=position_id,
@@ -144,15 +150,20 @@ class TransformerBlock(nn.Module):
             )
         else:
             h = x + self.attention(
-                self.attention_norm(x),
+                attn_in,
                 cu_seqlens=cu_seqlens,
                 max_seq_len=max_seq_len,
                 position_id=position_id,
                 **kwargs,
             )
 
+        if self.training and "ffn_norm" in self.recompute:
+            ffn_in = checkpoint(self.ffn_norm, self.distribute_saved_activations, h)
+        else:
+            ffn_in = self.ffn_norm(h)
+
         # moe should not use recompute for router, so let it handle recompute inside.
-        out = h + self.feed_forward(self.ffn_norm(h), recompute="feed_forward" in self.recompute)
+        out = h + self.feed_forward(ffn_in, recompute="feed_forward" in self.recompute)
 
         return out
 

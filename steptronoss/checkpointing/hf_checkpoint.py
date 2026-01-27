@@ -9,12 +9,12 @@ from loguru import logger
 from safetensors.torch import save_file
 
 from steptronoss.core.parallel_state import PM
-from steptronoss.exp.base_exp import ModelConfig
+from steptronoss.exp.base_exp import Megatron3DParallelModelConfig
 from steptronoss.utils.dist_utils import all_gather_object
 from steptronoss.utils.utils import unwrap_model
 
 
-def _build_hf_config_overrides(model_cfg: ModelConfig) -> dict:
+def _build_hf_config_overrides(model_cfg: Megatron3DParallelModelConfig) -> dict:
     """
     Build HF config overrides from exp.
     """
@@ -59,7 +59,7 @@ def dump_safetensors(
     model_reference_path: str,
     tokenizer_reference_path: str,
     models: list,
-    model_cfg: Optional[ModelConfig] = None,
+    model_cfg: Optional[Megatron3DParallelModelConfig] = None,
 ):
     # copy json configs
     if PM.world_rank == 0:
@@ -76,9 +76,7 @@ def dump_safetensors(
                 overrides = _build_hf_config_overrides(model_cfg)
                 _apply_config_overrides(config_path, overrides)
             else:
-                logger.warning(
-                    f"config.json not found in {save_path}, skip config override"
-                )
+                logger.warning(f"config.json not found in {save_path}, skip config override")
 
         if tokenizer_reference_path:
             for file in os.listdir(tokenizer_reference_path):

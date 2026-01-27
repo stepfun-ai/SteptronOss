@@ -1,7 +1,10 @@
 from typing import Callable
 
+from loguru import logger
 from torch import Tensor
 from torch.nn import Module
+
+from steptronoss.utils import convert_num
 
 
 def default_wd_cond(name: str, param: Tensor) -> float:
@@ -59,4 +62,11 @@ def advanced_get_param_groups(
         )
 
     del groups
+    for idx, group in enumerate(param_groups):
+        extra = "; ".join([f"{k}: {v}" for k, v in group.items() if k != "params"])
+        logger.info(
+            f"Optim group {idx} -> # params: "
+            f"{convert_num(sum([p.nelement() for p in group['params']]))}; "
+            f"{extra}"
+        )
     return param_groups

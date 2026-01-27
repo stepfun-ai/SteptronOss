@@ -90,6 +90,8 @@
 
 ::: steptronoss.utils.logger
 
+::: steptronoss.utils.comm_utils
+
 ::: steptronoss.utils.metrics
 
 ::: steptronoss.utils.utils

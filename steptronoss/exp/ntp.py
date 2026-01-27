@@ -5,22 +5,22 @@ import torch
 from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import (
     BaseExp,
-    CheckpointConfig,
     DataConfig,
     GradientManagerConfig,
     Megatron3DParallelModelConfig,
     MetricConfig,
     ProfilerConfig,
-    SchedulerConfig,
     TrainerConfig,
 )
+from steptronoss.exp.checkpointing import CheckpointConfig
+from steptronoss.exp.lr_schedulers import SchedulerConfig
 from steptronoss.utils import GlobalMetrics, Metric
 
 
 class PretrainMetricConfig(MetricConfig):
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
 
         self.lm_loss = Metric().mean("time").mean("dp").mean("ep")
 
@@ -38,8 +38,8 @@ class PretrainMetricConfig(MetricConfig):
 
 
 class MoePretrainMetricConfig(PretrainMetricConfig):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self):
+        super().__init__()
         from steptronoss.utils.metrics import ModelLayerMetric
 
         # MoE Metrics

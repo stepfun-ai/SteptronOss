@@ -29,7 +29,7 @@ from steptronoss.checkpointing.utils import (
     recur_stat,
 )
 from steptronoss.core.parallel_state import PM, get_vpp_size, set_vpp_rank
-from steptronoss.exp.base_exp import CheckpointConfig
+from steptronoss.exp.checkpointing import CheckpointConfig
 from steptronoss.utils import broadcast_tensors, unwrap_model
 from steptronoss.utils.weight_loader import HFWeights
 

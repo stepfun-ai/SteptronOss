@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Callable, Literal, Optional, TypedDict, Union
 import torch
 from configurize import Config, DataClass, Ref, writable_property
 
-from steptronoss.exp.base_exp import ModelConfig, ParallelConfig
+from steptronoss.exp.base_exp import Megatron3DParallelModelConfig, ParallelConfig
 from steptronoss.tokenizer.hf_compat_tokenizer import HFCompatTokenizer
 
 if TYPE_CHECKING:
@@ -117,24 +117,6 @@ class PartialRolloutConfig(Config):
                 metrics.partial_rollout_mean_tokens_in_turn.add(
                     token_len, subname=f"{self.max_num_partial_turns-1-turn}"
                 )
-
-
-class InferParallelConfig(ParallelConfig):
-    tensor_model_parallel_size: int = 1
-
-    parallel_definition: dict[str, str] = {
-        "TP": "(p d t) -> (p d) t",
-        "PP": "(p d t) -> (d t) p",
-    }
-
-    def sanity_check(self):
-        super().sanity_check()
-
-        assert self.expert_model_parallel_size == 1
-        assert self.context_parallel_size == 1
-        assert self.expert_tensor_parallel_size == 1
-        assert self.virtual_pipeline_model_parallel_size == 1
-        assert self.pipeline_model_parallel_size == 1
 
 
 class BaseInferenceConfig(Config):
@@ -309,7 +291,7 @@ class RolloutManagerConfig(Config):
         return AsyncRolloutManager(cfg=self)
 
 
-class InferencableModelConfig(ModelConfig):
+class InferencableModelConfig(Megatron3DParallelModelConfig):
     inference_config = VLLMInferenceConfig
     """Config for InferEngine, Sub[CacheCfg, OptimusModelCfg]"""
 
