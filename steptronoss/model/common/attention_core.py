@@ -4,6 +4,9 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from steptronoss.utils.optimizable import optimizable
 
 
 @torch.no_grad()
@@ -70,11 +73,7 @@ class FlashAttention(nn.Module):
         Returns:
             Attention output of shape [batch, seq, heads, head_dim]
         """
-        try:
-            from flash_attn import flash_attn_func, flash_attn_varlen_func
-        except ImportError:
-            # Fallback to standard attention if flash_attn is not available
-            return self._standard_attention(q, k, v)
+        from flash_attn import flash_attn_func, flash_attn_varlen_func
 
         batch_size, seq_len, num_heads, head_dim = q.shape
 
@@ -113,70 +112,131 @@ class FlashAttention(nn.Module):
 
         return output
 
-    def _standard_attention(
+
+@optimizable(alternatives={"flash-attn": FlashAttention})
+class AttentionCore(nn.Module):
+    """Scaled Dot-Product Attention (SDPA) implementation with FlashAttention-compatible API."""
+
+    def __init__(
+        self,
+        causal: bool = True,
+        attention_dropout: float = 0.0,
+        sliding_window: int = -1,
+        **kwargs,
+    ):
+        super().__init__()
+        self.causal = causal
+        self.attention_dropout = attention_dropout
+        self.sliding_window = (sliding_window, sliding_window)  # keep API parity with FlashAttention
+
+    @staticmethod
+    def _maybe_expand_kv(k: torch.Tensor, v: torch.Tensor, num_heads: int) -> tuple[torch.Tensor, torch.Tensor]:
+        kv_heads = k.shape[2]
+        if kv_heads == num_heads:
+            return k, v
+        if num_heads % kv_heads != 0:
+            raise ValueError(f"num_heads ({num_heads}) must be divisible by kv_heads ({kv_heads})")
+        repeat = num_heads // kv_heads
+        k = k.repeat_interleave(repeat, dim=2)
+        v = v.repeat_interleave(repeat, dim=2)
+        return k, v
+
+    @staticmethod
+    def _build_local_mask(q_len: int, k_len: int, window: int, causal: bool, device) -> torch.Tensor:
+        q_idx = torch.arange(q_len, device=device).unsqueeze(1)
+        k_idx = torch.arange(k_len, device=device).unsqueeze(0)
+        if window < 0:
+            if causal:
+                allowed = k_idx <= q_idx
+            else:
+                allowed = torch.ones((q_len, k_len), dtype=torch.bool, device=device)
+        else:
+            if causal:
+                allowed = (k_idx <= q_idx) & (k_idx >= (q_idx - window))
+            else:
+                allowed = (k_idx - q_idx).abs() <= window
+        return ~allowed  # True means masked for SDPA
+
+    def _sdpa(
         self,
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
+        *,
+        is_causal: bool,
+        attn_mask: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        """Fallback standard attention implementation."""
+        return F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            dropout_p=self.attention_dropout if self.training else 0.0,
+            is_causal=is_causal,
+        )
+
+    def forward(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seq_len: Optional[int] = None,
+    ) -> torch.Tensor:
+        """Compute SDPA attention with FlashAttention-compatible inputs/outputs."""
         batch_size, seq_len, num_heads, head_dim = q.shape
-        kv_heads = k.shape[2]
+        k, v = self._maybe_expand_kv(k, v, num_heads)
 
-        # Handle GQA: expand k, v to match q heads
-        if kv_heads != num_heads:
-            repeat_factor = num_heads // kv_heads
-            k = k.repeat_interleave(repeat_factor, dim=2)
-            v = v.repeat_interleave(repeat_factor, dim=2)
+        window = self.sliding_window[0]
+        use_mask = window is not None and window >= 0
 
-        # Transpose for attention: [batch, heads, seq, dim]
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        if cu_seqlens is not None:
+            cu_seqlens_q, cu_seqlens_k, max_q_len, max_k_len = parse_cu_seqlens(cu_seqlens, max_seq_len)
 
-        # Scaled dot-product attention
-        scale = 1.0 / (head_dim**0.5)
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale
+            q_flat = q.reshape(-1, num_heads, head_dim)
+            k_flat = k.reshape(-1, num_heads, head_dim)
+            v_flat = v.reshape(-1, num_heads, head_dim)
 
-        # Build attention mask
-        mask = torch.zeros(seq_len, seq_len, dtype=torch.bool, device=q.device)
+            outputs = []
+            for b in range(cu_seqlens_q.numel() - 1):
+                q_start = int(cu_seqlens_q[b].item())
+                q_end = int(cu_seqlens_q[b + 1].item())
+                k_start = int(cu_seqlens_k[b].item())
+                k_end = int(cu_seqlens_k[b + 1].item())
 
-        if self.causal:
-            # Causal mask: cannot attend to future positions
-            causal_mask = torch.triu(
-                torch.ones(seq_len, seq_len, dtype=torch.bool, device=q.device),
-                diagonal=1,
-            )
-            mask = mask | causal_mask
+                q_seq = q_flat[q_start:q_end].transpose(0, 1).unsqueeze(0)  # [1, h, q, d]
+                k_seq = k_flat[k_start:k_end].transpose(0, 1).unsqueeze(0)  # [1, h, k, d]
+                v_seq = v_flat[k_start:k_end].transpose(0, 1).unsqueeze(0)  # [1, h, k, d]
 
-        # Sliding window mask
-        window_left, window_right = self.sliding_window
-        if window_left >= 0 or window_right >= 0:
-            # Create position indices
-            rows = torch.arange(seq_len, device=q.device).unsqueeze(1)
-            cols = torch.arange(seq_len, device=q.device).unsqueeze(0)
+                attn_mask = None
+                is_causal = self.causal and not use_mask
+                if use_mask:
+                    attn_mask = self._build_local_mask(
+                        q_seq.shape[-2],
+                        k_seq.shape[-2],
+                        window,
+                        self.causal,
+                        device=q_seq.device,
+                    )
+                    attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
 
-            # Mask positions outside the window
-            if window_left >= 0:
-                # Cannot attend to positions more than window_left steps before
-                left_mask = cols < (rows - window_left)
-                mask = mask | left_mask
+                out = self._sdpa(q_seq, k_seq, v_seq, is_causal=is_causal, attn_mask=attn_mask)
+                outputs.append(out.squeeze(0).transpose(0, 1))  # [q, h, d]
 
-            if window_right >= 0 and not self.causal:
-                # Cannot attend to positions more than window_right steps after
-                # (only applies for non-causal, causal already masks future)
-                right_mask = cols > (rows + window_right)
-                mask = mask | right_mask
+            output = torch.cat(outputs, dim=0)
+            output = output.reshape(batch_size, seq_len, num_heads, head_dim)
+        else:
+            q_t = q.transpose(1, 2)  # [b, h, s, d]
+            k_t = k.transpose(1, 2)
+            v_t = v.transpose(1, 2)
 
-        if mask.any():
-            attn_weights.masked_fill_(mask, float("-inf"))
+            attn_mask = None
+            is_causal = self.causal and not use_mask
+            if use_mask:
+                attn_mask = self._build_local_mask(seq_len, k_t.shape[-2], window, self.causal, device=q_t.device)
+                attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
 
-        attn_weights = torch.softmax(attn_weights.float(), dim=-1).type_as(q)
-
-        if self.training and self.attention_dropout > 0:
-            attn_weights = torch.dropout(attn_weights, self.attention_dropout, True)
-
-        output = torch.matmul(attn_weights, v)
-        output = output.transpose(1, 2)  # [batch, seq, heads, dim]
+            output = self._sdpa(q_t, k_t, v_t, is_causal=is_causal, attn_mask=attn_mask)
+            output = output.transpose(1, 2)
 
         return output

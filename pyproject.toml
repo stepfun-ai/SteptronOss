@@ -24,7 +24,6 @@ dependencies = [
     "configurize",
     "einops",
     "fastapi",
-    "flash-attn",
     "hjson",
     "ijson",
     "loguru",
@@ -49,6 +48,9 @@ dependencies = [
 [project.optional-dependencies]
 grouped_gemm = [
     "nv-grouped-gemm",
+]
+flash_attn = [
+    "flash-attn",
 ]
 
 [tool.uv.sources]

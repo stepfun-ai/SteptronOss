@@ -11,7 +11,7 @@ from steptronoss.core.context_parallel import (
 )
 from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import MegatronTPConfig
-from steptronoss.model.common.attention_core import FlashAttention
+from steptronoss.model.common.attention_core import AttentionCore
 from steptronoss.model.common.rms_norm import RMSNorm
 from steptronoss.model.common.rope import YARNRoPE
 from steptronoss.utils import safediv
@@ -127,7 +127,7 @@ class GroupedQueryAttention(torch.nn.Module):
             **cfg.tp_cfg.get_tp_kwargs(),
         )
 
-        self.core_attention = FlashAttention(
+        self.core_attention = AttentionCore(
             causal=self.cfg.causal,
             attention_dropout=self.cfg.attention_dropout,
             sliding_window=(self.cfg.sliding_window_size if self.sliding_window else -1),
