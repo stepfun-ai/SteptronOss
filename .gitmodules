@@ -1,0 +1,3 @@
+[submodule "third_party/grouped_gemm"]
+	path = third_party/grouped_gemm
+	url = https://github.com/fanshiqing/grouped_gemm.git
