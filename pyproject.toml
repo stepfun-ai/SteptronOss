@@ -54,7 +54,7 @@ flash_attn = [
 ]
 
 [tool.uv.sources]
-nv-grouped-gemm = { path = "./third_party/grouped_gemm" }
+nv-grouped-gemm = { git = "https://github.com/fanshiqing/grouped_gemm.git" }
 
 [project.urls]
 Homepage = "https://Randomizez.github.io/SteptronOss/"
