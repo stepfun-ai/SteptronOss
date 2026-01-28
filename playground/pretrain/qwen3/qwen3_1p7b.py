@@ -19,7 +19,6 @@ class Qwen3AttentionConfig(AttentionConfig):
         self.attention_dropout = 0.0
 
         self.use_sliding_window = False
-        self.num_sliding_attention_heads = None
 
         self.num_attention_heads = 16
         self.num_attention_groups = 8  # KV heads for GQA
@@ -51,7 +50,6 @@ class Qwen3FeedForwardConfig(FeedForwardConfig):
 
     def __init__(self):
         super().__init__()
-        self.recompute_granularity = None
 
         self.hidden_size = 2048
         self.ffn_hidden_size = 6144
@@ -94,7 +92,7 @@ class Qwen3ParallelConfig(ParallelConfig):
 
     def __init__(self):
         super().__init__()
-        self.tensor_model_parallel_size = 2
+        self.tensor_model_parallel_size = 4
         self.pipeline_model_parallel_size = 1
         self.virtual_pipeline_model_parallel_size = 1
         self.context_parallel_size = 1

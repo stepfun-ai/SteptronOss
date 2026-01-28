@@ -4,7 +4,16 @@ from typing import TYPE_CHECKING
 
 from configurize import Config
 
-from steptronoss.exp.base_exp import DataConfig
+from steptronoss.exp.base_exp import (
+    BaseExp,
+    DataConfig,
+    GradientManagerConfig,
+    Megatron3DParallelModelConfig,
+    ProfilerConfig,
+)
+from steptronoss.exp.checkpointing import CheckpointConfig
+from steptronoss.exp.lr_schedulers import SchedulerConfig
+from steptronoss.exp.ntp import NTPTrainerConfig, PretrainMetricConfig
 
 if TYPE_CHECKING:
     from steptronoss.data.datasets.base_language_dataset import Dataset
@@ -23,3 +32,15 @@ class SFTDataConfig(DataConfig):
 
     def build_dataloader(self, dp_rank=0, dp_size=1):
         raise NotImplementedError
+
+
+class SFTExp(BaseExp):
+    trainer_cfg: NTPTrainerConfig
+    model_cfg: Megatron3DParallelModelConfig
+    optimizer_cfg: GradientManagerConfig
+    scheduler_cfg: SchedulerConfig
+    data_cfg: SFTDataConfig
+    checkpoint_cfg: CheckpointConfig
+
+    metric_cfg: PretrainMetricConfig
+    profiler_cfg: ProfilerConfig

@@ -218,3 +218,14 @@ class QwenModel(LlamaLikeModel):
             )
 
         return OnlineReshaper(scripts)
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        if self.cfg.tie_embedding:
+            m, u = super().load_state_dict(state_dict, strict=False, assign=assign)
+            if m or u:
+                if len(m) == 1 and m[0] == "out_embeddings.output.weight":
+                    pass
+                else:
+                    raise RuntimeError(f"Missing: {m}; Unexpected: {u}")
+        else:
+            return super().load_state_dict(state_dict, strict=strict, assign=assign)

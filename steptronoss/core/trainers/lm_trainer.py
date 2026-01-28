@@ -93,9 +93,6 @@ class DecoderPretrainTrainer(BaseTrainer):
         ## Model
         self.models = self.setup_model(self.exp.model_cfg)
 
-        ## Sync input embeddings around the world
-        mtp_initialize(self.models)
-
         if "model" in state_dicts:
             load_model_checkpoint(
                 self.models,

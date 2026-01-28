@@ -354,7 +354,7 @@ def is_pipeline_last_stage(ignore_virtual=False):
 #         )
 
 
-def get_vpp_rank():
+def get_vpp_rank() -> int:
     """Return the virtual pipeline-parallel rank."""
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
     return _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
@@ -366,7 +366,7 @@ def set_vpp_rank(rank):
     _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK = rank
 
 
-def get_vpp_size():
+def get_vpp_size() -> int:
     """Return the virtual pipeline-parallel world size."""
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
     return _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE

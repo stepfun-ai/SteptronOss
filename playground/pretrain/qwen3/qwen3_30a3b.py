@@ -21,7 +21,6 @@ class Qwen3AttentionConfig(AttentionConfig):
         self.attention_dropout = 0.0
 
         self.use_sliding_window = False
-        self.num_sliding_attention_heads = None
 
         self.num_attention_heads = 32
         self.num_attention_groups = 4  # KV heads for GQA
@@ -78,7 +77,6 @@ class Qwen3MoEFeedForwardConfig(MoEFeedForwardConfig):
 
     def __init__(self):
         super().__init__()
-        self.recompute_granularity = None
 
         self.hidden_size = Ref("..hidden_size")
         self.ffn_hidden_size = 6144

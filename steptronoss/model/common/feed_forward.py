@@ -11,8 +11,6 @@ from steptronoss.exp.base_exp import MegatronTPConfig
 class FeedForwardConfig(Config):
     tp_cfg: MegatronTPConfig = Ref("..tp_cfg")
 
-    recompute_granularity: Optional[str]
-
     hidden_size: int
     ffn_hidden_size: int
 

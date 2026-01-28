@@ -24,8 +24,6 @@ class AttentionConfig(Config):
 
     use_sliding_window: bool
 
-    num_sliding_attention_heads: int
-
     num_attention_heads: int
     num_attention_groups: int
 
@@ -68,11 +66,7 @@ class GroupedQueryAttention(torch.nn.Module):
 
         self.sliding_window = self.cfg.use_sliding_window
 
-        # 根据是否是 sliding_window 来选择使用的 head 数量
-        if self.sliding_window and cfg.num_sliding_attention_heads is not None:
-            self.num_heads = cfg.num_sliding_attention_heads
-        else:
-            self.num_heads = cfg.num_attention_heads
+        self.num_heads = cfg.num_attention_heads
 
         self.num_local_heads = safediv(self.num_heads, self.tp_size)
         self.n_local_heads = self.num_local_heads  # name adatped for

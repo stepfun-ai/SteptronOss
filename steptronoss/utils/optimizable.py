@@ -82,3 +82,5 @@ def set_optimization(default=None, **kwargs):
         else:
             logger.error(f"Cannot find Func {k} in optimizable register! Availables: \n{pformat(op_abbr_map)}")
             raise KeyError()
+    optim_map = "\n".join(f"{k} -> {v['use_optimize']}" for k, v in OPTIMIZABLE_REGISTER.items())
+    logger.info(f"Optimization set: \n{optim_map}", at=0)
