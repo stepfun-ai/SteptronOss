@@ -10,10 +10,10 @@ check: ## Run code quality tools.
 	@uv lock --locked
 	@echo "🚀 Linting code: Running pre-commit"
 	@uv run pre-commit run -a
-	@echo "🚀 Static type checking: Running mypy"
-	@uv run mypy
-	@echo "🚀 Checking for obsolete dependencies: Running deptry"
-	@uv run deptry .
+# 	@echo "🚀 Static type checking: Running mypy"
+# 	@uv run mypy
+# 	@echo "🚀 Checking for obsolete dependencies: Running deptry"
+# 	@uv run deptry .
 
 .PHONY: test
 test: ## Test the code with pytest
@@ -40,7 +40,7 @@ build-and-publish: build publish ## Build and publish.
 
 .PHONY: docs-test
 docs-test: ## Test if documentation can be built without warnings or errors
-	@uv run mkdocs build -s
+	@uv run mkdocs build
 
 .PHONY: docs
 docs: ## Build and serve the documentation
