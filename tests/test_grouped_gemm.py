@@ -1,7 +1,6 @@
 import pytest
 import torch
 
-pytest.importorskip("grouped_gemm.ops")
 pytestmark = pytest.mark.gpu
 
 from steptronoss.model.utils import grouped_gemm

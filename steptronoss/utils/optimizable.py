@@ -51,3 +51,34 @@ def optimizable(alternatives: dict[str, Callable] = None):
         return wrapped
 
     return wrapper
+
+
+def set_optimization(default=None, **kwargs):
+    from pprint import pformat
+
+    global OPTIMIZABLE_REGISTER
+    op_abbr_map = {}
+    for k in OPTIMIZABLE_REGISTER:
+        func_name = k.split(".")[-1]
+        if func_name in op_abbr_map:  # already exists, disable abbr
+            op_abbr_map[func_name] = None
+        else:
+            op_abbr_map[func_name] = k
+        op_abbr_map[k] = k
+    op_abbr_map = {k: v for k, v in op_abbr_map.items() if v is not None}
+
+    for k, v in OPTIMIZABLE_REGISTER.items():
+        if default in v["alternatives"]:
+            v["use_optimize"] = default
+
+    for k, v in kwargs.items():
+        if k in op_abbr_map:
+            register = OPTIMIZABLE_REGISTER[op_abbr_map[k]]
+            if v in register["alternatives"]:
+                register["use_optimize"] = v
+            else:
+                logger.error(f"Func {k} has no alter named {v}! Availables: \n{pformat(register['alternatives'])}")
+                raise KeyError()
+        else:
+            logger.error(f"Cannot find Func {k} in optimizable register! Availables: \n{pformat(op_abbr_map)}")
+            raise KeyError()

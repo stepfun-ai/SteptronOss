@@ -17,6 +17,42 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+dependencies = [
+    "aiohttp",
+    "aioredis",
+    "boto3",
+    "configurize",
+    "einops",
+    "fastapi",
+    "flash-attn",
+    "hjson",
+    "ijson",
+    "loguru",
+    "megfile",
+    "msgpack",
+    "numpy",
+    "packaging",
+    "pyyaml",
+    "redis",
+    "safetensors",
+    "setuptools",
+    "tabulate",
+    "torch",
+    "tqdm",
+    "transformers",
+    "triton",
+    "uvicorn",
+    "wandb",
+    "httpx",
+]
+
+[project.optional-dependencies]
+grouped_gemm = [
+    "nv-grouped-gemm",
+]
+
+[tool.uv.sources]
+nv-grouped-gemm = { path = "./third_party/grouped_gemm" }
 
 [project.urls]
 Homepage = "https://Randomizez.github.io/SteptronOss/"
@@ -35,18 +71,14 @@ dev = [
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.7.0",
     "mkdocstrings[python]>=1.0.0",
-
-
-    "loguru",
-    "torch",
-    "configurize",
-    "numpy",
-    "megfile",
-    "msgpack",
-    "tabulate",
-    "redis",
-    "fastapi",
+    "black",
+    "isort",
+    "py-spy",
+    "debugpy",
 ]
+
+[tool.uv.extra-build-dependencies]
+flash-attn = [{ requirement = "torch", match-runtime = true }]
 
 [build-system]
 requires = ["hatchling"]

@@ -304,7 +304,7 @@ def moe_scatter(input: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
     return MoEScatter.apply(input, index)
 
 
-def grouped_gemm(mat_a_flat, mat_b, batch_sizes, trans_b=False):
+def nv_grouped_gemm(mat_a_flat, mat_b, batch_sizes, trans_b=False):
     from grouped_gemm import ops as grouped_gemm_ops
 
     xm, k = mat_a_flat.shape
@@ -314,32 +314,15 @@ def grouped_gemm(mat_a_flat, mat_b, batch_sizes, trans_b=False):
     return grouped_gemm_ops.gmm(mat_a_flat, mat_b, batch_sizes, trans_b=trans_b)
 
 
-@optimizable(alternatives={})
-def gemm(mat_a: torch.Tensor, mat_b: torch.Tensor) -> torch.Tensor:
-    """Grouped matrix multiplication using grouped_gemm.ops.gmm.
-
-    This computes a per-group GEMM: ``out[i] = mat_a[i] @ mat_b[i]``.
-
-    Args:
-        mat_a: Shape ``[num_groups, m, k]``.
-        mat_b: Shape ``[num_groups, k, n]``.
-
-    Returns:
-        Tensor of shape ``[num_groups, m, n]``.
-
-    Note:
-        This requires the ``grouped_gemm`` CUDA backend, so inputs should be on
-        CUDA and use a supported dtype.
-
-    Example:
-        >>> a = torch.randn(2, 3, 4, device="cuda", dtype=torch.bfloat16)
-        >>> b = torch.randn(2, 4, 5, device="cuda", dtype=torch.bfloat16)
-        >>> grouped_gemm(a, b).shape
-        torch.Size([2, 3, 5])
-    """
-    outs = []
-    for a, b in zip(mat_a, mat_b):
-        outs.append(a @ b)
-    if outs:
-        return torch.stack(outs, dim=0)
-    return mat_a.new_zeros((0, mat_a.shape[1], mat_b.shape[2]))
+@optimizable(alternatives={"nv_grouped_gemm": nv_grouped_gemm})
+def grouped_gemm(mat_a_flat, mat_b, batch_sizes, trans_b=False):
+    batch_sizes_list = batch_sizes.tolist()
+    outputs = []
+    start = 0
+    for i, size in enumerate(batch_sizes_list):
+        rhs = mat_b[i].t() if trans_b else mat_b[i]
+        outputs.append(mat_a_flat[start : start + size] @ rhs)
+        start += size
+    if outputs:
+        return torch.cat(outputs, dim=0)
+    return mat_a_flat.new_zeros((0, mat_b.shape[1] if trans_b else mat_b.shape[2]))
