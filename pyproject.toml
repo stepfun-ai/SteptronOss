@@ -45,13 +45,7 @@ dependencies = [
     "httpx",
 ]
 
-[project.optional-dependencies]
-grouped_gemm = [
-    "nv-grouped-gemm",
-]
-flash_attn = [
-    "flash-attn",
-]
+
 
 [tool.uv.sources]
 nv-grouped-gemm = { git = "https://github.com/fanshiqing/grouped_gemm.git" }
