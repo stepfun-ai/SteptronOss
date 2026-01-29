@@ -481,10 +481,10 @@ class TorchA2ADispatcher:
             recv_probs.append(token_expert_weights.new_empty((recv_tokens, K)))
             recv_token_ids.append(token_ids.new_empty((recv_tokens,)))
 
-        distnn.all_to_all(recv_hidden, send_hidden, group=self.group)
-        distnn.all_to_all(recv_indices, send_indices, group=self.group)
-        distnn.all_to_all(recv_probs, send_probs, group=self.group)
-        distnn.all_to_all(recv_token_ids, send_token_ids, group=self.group)
+        recv_hidden = distnn.all_to_all(recv_hidden, send_hidden, group=self.group)
+        recv_indices = distnn.all_to_all(recv_indices, send_indices, group=self.group)
+        recv_probs = distnn.all_to_all(recv_probs, send_probs, group=self.group)
+        recv_token_ids = distnn.all_to_all(recv_token_ids, send_token_ids, group=self.group)
 
         recv_hidden = torch.cat(recv_hidden, dim=0)
         recv_indices = torch.cat(recv_indices, dim=0)
@@ -516,8 +516,8 @@ class TorchA2ADispatcher:
             recv_hidden.append(hidden_states.new_empty((send_sizes[rank], C)))
             recv_token_ids.append(token_ids.new_empty((send_sizes[rank],)))
 
-        distnn.all_to_all(recv_hidden, send_hidden, group=self.group)
-        distnn.all_to_all(recv_token_ids, send_token_ids, group=self.group)
+        recv_hidden = distnn.all_to_all(recv_hidden, send_hidden, group=self.group)
+        recv_token_ids = distnn.all_to_all(recv_token_ids, send_token_ids, group=self.group)
 
         recv_hidden = torch.cat(recv_hidden, dim=0)
         recv_token_ids = torch.cat(recv_token_ids, dim=0)

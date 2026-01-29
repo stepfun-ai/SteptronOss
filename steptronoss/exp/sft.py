@@ -17,6 +17,7 @@ from steptronoss.exp.ntp import NTPTrainerConfig, PretrainMetricConfig
 
 if TYPE_CHECKING:
     from steptronoss.data.datasets.base_language_dataset import Dataset
+    from steptronoss.model.decoder_model import DecoderLLMConfig
 
 
 class SFTDatasetsConfig(Config):
@@ -36,7 +37,7 @@ class SFTDataConfig(DataConfig):
 
 class SFTExp(BaseExp):
     trainer_cfg: NTPTrainerConfig
-    model_cfg: Megatron3DParallelModelConfig
+    model_cfg: DecoderLLMConfig
     optimizer_cfg: GradientManagerConfig
     scheduler_cfg: SchedulerConfig
     data_cfg: SFTDataConfig

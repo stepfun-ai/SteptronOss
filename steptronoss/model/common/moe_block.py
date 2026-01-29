@@ -170,7 +170,6 @@ class GroupedExperts(torch.nn.Module):
         # skip grouped_gemm to avoid backend asserts and return zeros while still
         # participating in the ETP reduction.
         if experts_histogram.numel() == 0 or int(experts_histogram.sum().item()) == 0:
-            x = x.new_zeros(x.shape)
             x = reduce_from_tensor_model_parallel_region(x, group="ETP")
             return x
 
