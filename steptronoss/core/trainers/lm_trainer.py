@@ -49,7 +49,7 @@ class DecoderPretrainTrainer(BaseTrainer):
             skipped_iters=0,
         )
         self._skipped_iters = 0
-        
+
         self.train_iters: int = None
 
         self.build_hooks(self.exp.trainer_cfg)
@@ -117,7 +117,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         ## Dataloader
         self.train_data_iterators = self.build_dataloader(self.exp.data_cfg)
         self._compute_and_broadcast_train_iters()
-        
+
         if "data" in state_dicts:
             for dl in self.train_data_iterators:
                 if hasattr(dl, "load_state_dict"):
@@ -401,9 +401,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         """
         # Get local num_packed_samples (only data source has valid value)
         if self.exp.trainer_cfg.is_data_source():
-            local_num_samples = (
-                self.train_data_iterators[0].nextable.nextable.packing_result.num_packed_samples
-            )
+            local_num_samples = self.train_data_iterators[0].nextable.nextable.packing_result.num_packed_samples
         else:
             local_num_samples = 0
 
@@ -415,7 +413,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         # Compute train_iters (same for all ranks)
         self.train_iters = num_packed_samples // self.exp.trainer_cfg.global_batch_size
         self.exp.scheduler_cfg.total_schedule = self.train_iters
-        
+
         logger.info(
             f"Will train for {self.train_iters} iters.",
             at=0,

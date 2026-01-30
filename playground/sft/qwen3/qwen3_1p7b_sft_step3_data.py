@@ -16,7 +16,7 @@ class Exp(BaseExp):
         self.trainer_cfg.global_batch_size = 8
         self.trainer_cfg.global_seq_length = 65536
 
-        self.trainer_cfg.train_iters = 1000
+        # self.trainer_cfg.train_iters = 1000 # NOTE disable
         self.trainer_cfg.log_interval = 1
 
         self.checkpoint_cfg.load_option.none(but=["model"])
