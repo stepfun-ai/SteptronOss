@@ -10,10 +10,28 @@ from steptronoss.exp.sft import SFTDataConfig
 
 compiled_recipe = CompiledDataRecipe(
     domains={
+        "code": "/mnt/shared-storage/tenant/zhy/cp_260128_step/code",
         "math": "/mnt/shared-storage/tenant/zhy/cp_260128_step/math",
+        "science": "/mnt/shared-storage/tenant/zhy/cp_260128_step/science",
+        "swe_agentic": "/mnt/shared-storage/tenant/zhy/cp_260128_step/swe_agentic",
+        "toolcall": "/mnt/shared-storage/tenant/zhy/cp_260128_step/toolcall",
+        "general": "/mnt/shared-storage/tenant/zhy/cp_260128_step/general",
+        "logic": "/mnt/shared-storage/tenant/zhy/cp_260128_step/logic",
+        "dr": "/mnt/shared-storage/tenant/zhy/cp_260128_step/dr",
+        "long_context": "/mnt/shared-storage/tenant/zhy/cp_260128_step/long_context",
+        "vc": "/mnt/shared-storage/tenant/zhy/cp_260128_step/vc",
     },
     epochs={
+        "code": 3,
         "math": 2,
+        "science": 2,
+        "swe_agentic": 4,
+        "toolcall": 2,
+        "general": 2,
+        "logic": 3,
+        "dr": 3,
+        "long_context": 1,
+        "vc": 2,
     },
 )
 

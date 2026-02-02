@@ -113,6 +113,8 @@ class Step3p5ToyModelConfig(Step3p5FlashModelConfig):
         self.ffn_cfg.moe_cfg.moe_hidden_size = 768
         self.ffn_cfg.moe_cfg.share_expert_dim = 768
         self.ffn_cfg.moe_cfg.moe_layer_list = list(range(1, 48))
+        self.ffn_cfg.moe_cfg.enable_auxiliary_loss_free_load_balance = True
+        self.ffn_cfg.moe_cfg.router_bias_update_rate = 0.1
 
         self.ffn_cfg.ffn_hidden_size = 7168
 
@@ -131,4 +133,5 @@ class Step3p5ToyModelConfig(Step3p5FlashModelConfig):
             from torch.nn.init import trunc_normal_
 
             trunc_normal_(p)
+            p.has_initialized = True
         return model

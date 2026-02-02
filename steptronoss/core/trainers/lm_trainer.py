@@ -15,6 +15,7 @@ from steptronoss.core.trainers.base_trainer import BaseTrainer
 from steptronoss.exp.base_exp import DataConfig, Megatron3DParallelModelConfig
 from steptronoss.exp.ntp import PretrainExp, PretrainMetricConfig
 from steptronoss.initialize import mtp_initialize, set_mpu_random_seed
+from steptronoss.model.common.moe_block import MoEBlock
 
 # from steptronoss.model.distributed import DistributedDataParallel as LocalDDP
 from steptronoss.model.module import Float16Module
@@ -234,6 +235,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         # Update parameters.
         with self.timers.record("optimizer-step", log_level=1):
             update_successful, grad_norm, num_zeros_in_grad = self.grad_manager.step()
+        MoEBlock.update_router_balance_bias_per_gbs(self.models)
 
         GlobalMetrics.grad_norm.add(grad_norm)
         GlobalMetrics.grad_zeros.add(num_zeros_in_grad)

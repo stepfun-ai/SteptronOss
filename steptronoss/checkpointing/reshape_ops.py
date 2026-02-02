@@ -8,7 +8,7 @@ from einops import rearrange
 from loguru import logger
 
 from steptronoss.core.parallel_state import PM
-from steptronoss.utils.dist_utils import gather_dict
+from steptronoss.utils.dist_utils import all_gather_dict
 from steptronoss.utils.weight_loader import HFWeights, translate
 
 UnifiedTensorDict = dict[Any, torch.Tensor]
@@ -80,10 +80,7 @@ class Sequential(ReshapeOp):
 
 
 def _gather_reshape_piece(piece: dict, group):
-    gathered = gather_dict(piece, group=group, dst=0)
-    if gathered is None:
-        return _SKIP_RESHAPE
-    return gathered
+    return all_gather_dict(piece, group=group)
 
 
 class KeepThisTP(ReshapeOp):
@@ -354,6 +351,8 @@ class GQAMergeQKV(ReshapeOp):
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
         assert len(piece) == 1
         key_pattern: str = list(piece)[0].replace("qkv", "{}")
+        if "{}" not in key_pattern:
+            key_pattern += ".{}"
         tensors = piece[key_pattern.format("qkv")]
 
         n_kv_dims = self.group_num * self.head_dim * 2 // PM.size_of("TP")
@@ -404,6 +403,8 @@ class GQAMergeQKVBias(ReshapeOp):
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
         assert len(piece) == 1
         key_pattern: str = list(piece)[0].replace("qkv", "{}")
+        if "{}" not in key_pattern:
+            key_pattern += ".{}"
         tensors = piece[key_pattern.format("qkv")]
 
         n_kv_dims = self.group_num * self.head_dim * 2 // PM.size_of("TP")
@@ -459,6 +460,8 @@ class GQAMergeQKVG(ReshapeOp):
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
         assert len(piece) == 1
         key_pattern: str = list(piece)[0].replace("qkv", "{}")
+        if "{}" not in key_pattern:
+            key_pattern += ".{}"
         tensors = piece[key_pattern.format("qkv")]
 
         n_kv_dims = self.group_num * self.head_dim * 2 // PM.size_of("TP")
@@ -496,9 +499,9 @@ class FFNMergeGateUp(ReshapeOp):
         assert len(piece) == 2
         kgate = kup = None
         for k in piece:
-            if "gate_proj" in k:
+            if "gate" in k:
                 kgate = k
-            if "up_proj" in k:
+            if "up" in k:
                 kup = k
         assert all([kgate, kup])
         gate = piece[kgate].chunk(PM.size_of(self.group), -2)[PM.rank_in(self.group)]
@@ -513,6 +516,8 @@ class FFNMergeGateUp(ReshapeOp):
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
         assert len(piece) == 1
         key_pattern: str = list(piece)[0].replace("gate_up", "{}")
+        if "{}" not in key_pattern:
+            key_pattern += ".{}"
         tensors = piece[key_pattern.format("gate_up")]
 
         gates, ups = [], []

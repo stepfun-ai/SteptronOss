@@ -31,8 +31,8 @@ class Exp(BaseExp):
         from steptronoss.utils.optimizable import set_optimization
 
         set_optimization(
-            grouped_gemm="nv_grouped_gemm",
-            # AttentionCore="flash-attn",
+            # grouped_gemm="nv_grouped_gemm",
+            AttentionCore="flash-attn",
             default="torch_compile",
         )
 

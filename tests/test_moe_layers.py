@@ -7,7 +7,6 @@ pytestmark = [
     pytest.mark.gpu,
     pytest.mark.node2,
 ]
-ops = pytest.importorskip("grouped_gemm.ops")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -51,7 +50,7 @@ def _set_parallel(tp: int, ep: int):
     parallel_cfg.pipeline_model_parallel_size = 1
     parallel_cfg.context_parallel_size = 1
     parallel_cfg.expert_model_parallel_size = ep
-    parallel_cfg.expert_tensor_parallel_size = 1
+    parallel_cfg.expert_tensor_parallel_size = tp
     parallel_cfg.virtual_pipeline_model_parallel_size = 1
     PM.set_mesh(parallel_cfg)
 
@@ -89,6 +88,7 @@ def test_moe_share_expert_ffn_backward_reference(monkeypatch, tp, ep):
     tp_cfg.params_dtype = torch.bfloat16
     tp_cfg.sequence_parallel = True
     tp_cfg.async_tensor_model_parallel_allreduce = False
+    tp_cfg.gradient_accumulation_fusion = False
     ffn_cfg.tp_cfg = tp_cfg
 
     moe_cfg = moe_block.MoEConfig()
@@ -103,8 +103,6 @@ def test_moe_share_expert_ffn_backward_reference(monkeypatch, tp, ep):
     moe_cfg.enable_sigmoid_router = False
     moe_cfg.router_bias_update_rate = 0.01
     moe_cfg.moe_enable_deepep = True
-    moe_cfg.moe_deepep_num_sms = 8
-    moe_cfg.fuse_moescatter_and_moecolumn = False
     moe_cfg.enable_auxiliary_loss_free_load_balance = True
     moe_cfg.norm_expert_weight = False
     moe_cfg.moe_layer_list = [0]
@@ -120,10 +118,10 @@ def test_moe_share_expert_ffn_backward_reference(monkeypatch, tp, ep):
         torch.nn.init.trunc_normal_(module.moe.gate.weight)
         module.share_expert.w1.weight.fill_(0.1)
         module.share_expert.w2.weight.fill_(0.2)
-        for eid in range(len(module.moe.w1)):
+        for eid in range(len(module.moe.experts.w1)):
             value = (eid + 1 + PM.rank_in("EP") * 4) / 10
-            module.moe.w1[eid].fill_(value)
-            module.moe.w2[eid].fill_(value)
+            module.moe.experts.w1[eid].fill_(value)
+            module.moe.experts.w2[eid].fill_(value)
 
     module = module.cuda().bfloat16()
 
@@ -151,21 +149,21 @@ def test_moe_share_expert_ffn_backward_reference(monkeypatch, tp, ep):
     if PM.world_rank == 1:
         assert y[-1, 0, -1] == 9.3125
     if PM.world_rank == 0:
-        assert module.moe.w1.main_grad[0, 0, 0].item() == 1888
+        assert module.moe.experts.w1.main_grad[0, 0, 0].item() == 1888
     if PM.size_of("EP") == 2:
         if PM.world_rank == 1:
-            assert module.moe.w1.main_grad[0, 0, 0].item() == 2768
+            assert module.moe.experts.w1.main_grad[0, 0, 0].item() == 2768
     else:
         if PM.world_rank == 1:
-            assert module.moe.w1.main_grad[0, 0, 0].item() == 1888
+            assert module.moe.experts.w1.main_grad[0, 0, 0].item() == 1888
 
     y = module(x)
     y.sum().backward()
     if PM.world_rank == 0:
-        assert module.moe.w1.main_grad[0, 0, 0].item() == 3776
+        assert module.moe.experts.w1.main_grad[0, 0, 0].item() == 3776
     if PM.size_of("EP") == 2:
         if PM.world_rank == 1:
-            assert module.moe.w1.main_grad[0, 0, 0].item() == 5536
+            assert module.moe.experts.w1.main_grad[0, 0, 0].item() == 5536
     else:
         if PM.world_rank == 1:
-            assert module.moe.w1.main_grad[0, 0, 0].item() == 3776
+            assert module.moe.experts.w1.main_grad[0, 0, 0].item() == 3776
