@@ -55,13 +55,8 @@ def clip_grad_norm_fp32(
     grads = []
     for param in parameters:
         if param.grad is not None:
-            if getattr(param, "is_muon_param", False):
-                # We process the gathered_grad to keep the consistency of gathered_grad across different dp.
-                assert param.gathered_grad.type() == "torch.cuda.FloatTensor"
-                grads.append(param.gathered_grad.detach())
-            else:
-                assert param.grad.type() == "torch.cuda.FloatTensor"
-                grads.append(param.grad.detach())
+            assert param.grad.type() == "torch.cuda.FloatTensor"
+            grads.append(param.grad.detach())
 
     # Norm parameters.
     max_norm = float(max_norm)

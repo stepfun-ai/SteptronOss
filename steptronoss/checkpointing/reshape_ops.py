@@ -50,11 +50,12 @@ class ReshapeOp:
             return new_ops
 
 
-_SKIP_RESHAPE = object()
+class Identity(ReshapeOp):
+    def forward(self, piece):
+        return piece
 
-
-def _is_skip_reshape(piece) -> bool:
-    return piece is _SKIP_RESHAPE
+    def backward(self, piece):
+        return piece
 
 
 class Sequential(ReshapeOp):
@@ -68,11 +69,7 @@ class Sequential(ReshapeOp):
 
     def backward(self, piece):
         for op in self.ops[::-1]:
-            if _is_skip_reshape(piece):
-                return {}
             piece = op.backward(piece)
-            if _is_skip_reshape(piece):
-                return {}
         return piece
 
     def append(self, op: ReshapeOp):
@@ -95,8 +92,6 @@ class KeepThisTP(ReshapeOp):
     def backward(self, piece: dict) -> dict:
         # {} -> [{}, {}]
         raw_piece = _gather_reshape_piece(piece, group=PM.group_of(self.group))
-        if _is_skip_reshape(raw_piece):
-            return raw_piece
         # [{A:1}, {A:2}] -> {A:[1, 2]}
         keys = set()
         for p in raw_piece:
@@ -160,8 +155,6 @@ class KeepThisEP(ReshapeOp):
 
         # Gather all pieces from EP group
         gathered_pieces = _gather_reshape_piece(piece, group=PM.group_of("EP"))
-        if _is_skip_reshape(gathered_pieces):
-            return gathered_pieces
 
         # Infer num_local_experts to calculate offsets
         # We check all gathered pieces to find the max local ID
@@ -671,9 +664,6 @@ class OnlineReshaper(ReshapeOp):
             raw_piece = self.get_piece_by_pattern(weights, script_piece.dst)
 
             new_piece = script_piece.op.backward(raw_piece)
-
-            if _is_skip_reshape(new_piece):
-                continue
 
             if script_piece.src is None:
                 script_piece.src = list(new_piece.keys())

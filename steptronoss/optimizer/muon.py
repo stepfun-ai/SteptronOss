@@ -5,7 +5,7 @@ import math
 import torch
 from loguru import logger
 
-from steptronoss.checkpointing.reshape_ops import ReshapeOp
+from steptronoss.checkpointing.reshape_ops import Identity, ReshapeOp
 from steptronoss.optimizer._helpers import get_zeropower_fn
 
 
@@ -103,7 +103,10 @@ class Muon(torch.optim.Optimizer):
                 # shard_cfg = p.sharded_tensor_config
 
                 # merge_op is required to map sharded grads to per-matrix updates.
-                merge_op: ReshapeOp = p.merge_op
+                merge_op: ReshapeOp = getattr(p, "merge_op", None)
+                if merge_op is None:
+                    logger.warning(f"A param with name shape {p.shape} has no merge_op, using identity (no gather).")
+                    merge_op = Identity()
 
                 # update muon momentum first
                 g: torch.Tensor = p.grad

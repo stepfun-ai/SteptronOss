@@ -32,6 +32,7 @@ Not every interaction needs an improvement pass. But for **key tasks**, do an Im
 - Checkpoint reshape: `steptronoss/checkpointing/reshape_ops.py` provides `ReshapeOp` primitives (e.g., `VocabPad`, `ColumnParallel`/`RowParallel`, `KeepThisTP/EP`, `GQAMergeQKV`, `FFNMergeGateUp`, `UnbindMoE`, `Rename`, `Inverse`) and `OnlineReshaper` + `Script` to map HF ↔ ST keys. Usage pattern in `steptronoss/model/qwen_dense.py`: `build_reshaper()` builds a list of `Script(src=..., op=..., dst=...)` and returns `OnlineReshaper(scripts)`. New ops: implement `forward` (HF→ST piece) + `backward` (ST→HF), compose with `+` (Sequential), and use `Script` patterns to select keys.
 
 - Muon optimizer: use `MuonConfig.mark_muon_params(model)`; it uses config fields to set `param.is_muon_param` before grouping.
+- Muon in experiments: override `optimizer_cfg` with a `GradientManagerConfig` subclass that sets `optimizer_cfg = MuonConfig` (keeps configurize pattern); leave distributed optimizer on but avoid byte-level sharding.
 ### Local Priors
 
 - Repo layout: core package under `steptronoss/` (core, model, data, exp, optimizer, generation, tokenizer, utils, checkpointing); experiments live in `playground/`; tests in `tests/`.

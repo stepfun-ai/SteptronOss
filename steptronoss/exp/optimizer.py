@@ -157,6 +157,19 @@ class MuonConfig(OptimizerConfig):
 
         self.mark_muon_params(model)
         self.mark_gather_ops(model)
+        missing_merge_op = []
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if not hasattr(param, "merge_op"):
+                missing_merge_op.append(name)
+        if missing_merge_op:
+            preview = ", ".join(missing_merge_op[:10])
+            total = len(missing_merge_op)
+            raise RuntimeError(
+                "Muon requires merge_op for all trainable params, "
+                f"but found {total} missing (showing first 10): {preview}"
+            )
 
         def is_muon_param(name: str, param: Parameter) -> bool:
             return getattr(param, "is_muon_param", False)

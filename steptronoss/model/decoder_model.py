@@ -197,6 +197,8 @@ class LlamaLikeModel(MegatronModule):
 
         self.build(self.layer_map)
 
+        self.name_parameters()
+
     def build(self, layer_map: dict[int, dict[int, dict[int, dict]]]):
         # Build model components
         self.layers = nn.ModuleList()

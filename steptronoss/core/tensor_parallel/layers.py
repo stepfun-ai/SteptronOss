@@ -31,6 +31,7 @@ _MODEL_PARALLEL_ATTRIBUTE_DEFAULTS = {
     "expert_model_parallel": False,
     "manual_grad_bucket_prefix": None,
     "is_muon_param": False,
+    "merge_op": None,
     "sequence_parallel": False,
     "micro_dp": False,
     "shared": False,
