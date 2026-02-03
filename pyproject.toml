@@ -36,14 +36,15 @@ dependencies = [
     "safetensors",
     "setuptools",
     "tabulate",
-    "torch==2.8.0",
+    "torch==2.9.0",
     "tqdm",
-    "transformers",
-    "triton==3.4.0",
+    "transformers<5.0",
+    "triton==3.5.0",
     "uvicorn",
     "wandb",
     "httpx",
     "pip>=25.3",
+    "vllm>=0.11",
 ]
 
 

@@ -5,24 +5,44 @@ import threading
 from collections.abc import Iterable
 
 import aiohttp
+import uvicorn
 from configurize import Config
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
+from steptronoss.utils.comm_utils import get_exp_redis
+from steptronoss.utils.general import get_free_port, get_my_ip
+
 
 class VLLMRouterConfig(Config):
-    host: str = "0.0.0.0"
-    port: int = 8000
-    request_timeout: float | None = 120.0
-    endpoints: list[str] = []
+    router_addr_key: str = "default"
+
+    routed_methods: dict[str, list[str]] = {"completions": ["POST"]}
+
+    def run(self):
+        router = VLLMRouter(cfg=self)
+        router.serve()
 
 
 class VLLMRouter:
-    ROUTED_METHODS = {"completions": ["POST"]}
+    """vLLM request router.
+
+    APIs:
+    - GET /register?endpoint=host:port
+    - GET /unregister?endpoint=host:port
+    - GET /get_info  -> [{"endpoint": "host:port"}, ...]
+    - /v1/{route} proxies requests to registered vLLM servers (default: /v1/completions).
+
+    Discovery:
+    On startup, the router picks an open port, then publishes its address to the
+    experiment Redis via get_exp_redis() under key f"VLLM_ROUTER_ADDR_PORT_{cfg.router_addr_key}"
+    (format: "{ip}:{port}"). Clients should use block_get_redis(exp_redis,
+    f"VLLM_ROUTER_ADDR_PORT_{cfg.router_addr_key}") to fetch the router address.
+    """
 
     def __init__(self, cfg: VLLMRouterConfig):
         self.cfg = cfg
-        self._endpoints: list[str] = list(cfg.endpoints)
+        self._endpoints: list[str] = list()
         self._lock = threading.Lock()
         self._rr_index = 0
         self._session: aiohttp.ClientSession | None = None
@@ -32,7 +52,7 @@ class VLLMRouter:
         app.add_api_route("/unregister", self._unregister_api, methods=["GET"])
         app.add_api_route("/get_info", self._get_info_api, methods=["GET"])
 
-        for route_name, methods in self.ROUTED_METHODS.items():
+        for route_name, methods in self.cfg.routed_methods.items():
             app.add_api_route(
                 f"/v1/{route_name}",
                 self._make_proxy(route_name),
@@ -60,9 +80,17 @@ class VLLMRouter:
             return [{"endpoint": endpoint} for endpoint in self._endpoints]
 
     def serve(self):
-        import uvicorn
+        my_ip = get_my_ip()
+        my_port = get_free_port()
+        my_info = f"{my_ip}:{my_port}"
 
-        uvicorn.run(self.app, host=self.cfg.host, port=self.cfg.port)
+        exp_redis = get_exp_redis()
+        exist_info = exp_redis.get(f"VLLM_ROUTER_ADDR_PORT_{self.cfg.router_addr_key}")
+        # if exist_info is not None and exist_info.decode() != my_info:
+        #     raise RuntimeError("It seems an VLLM router has already running!")
+        exp_redis.set(f"VLLM_ROUTER_ADDR_PORT_{self.cfg.router_addr_key}", f"{my_ip}:{my_port}")
+
+        uvicorn.run(self.app, host="0.0.0.0", port=my_port)
 
     def _register_api(self, endpoint: str) -> bool:
         return self.register(endpoint)
@@ -75,10 +103,7 @@ class VLLMRouter:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            timeout = None
-            if self.cfg.request_timeout is not None:
-                timeout = aiohttp.ClientTimeout(total=self.cfg.request_timeout)
-            self._session = aiohttp.ClientSession(timeout=timeout)
+            self._session = aiohttp.ClientSession(timeout=None)
         return self._session
 
     def _make_proxy(self, route_name: str):
@@ -164,7 +189,9 @@ class VLLMRouter:
         return f"http://{endpoint}"
 
     @staticmethod
-    def _filter_request_headers(headers: Iterable[tuple[str, str]] | dict) -> dict[str, str]:
+    def _filter_request_headers(
+        headers: Iterable[tuple[str, str]] | dict,
+    ) -> dict[str, str]:
         if hasattr(headers, "items"):
             items = headers.items()
         else:
@@ -178,7 +205,9 @@ class VLLMRouter:
         return filtered
 
     @staticmethod
-    def _filter_response_headers(headers: Iterable[tuple[str, str]] | dict) -> dict[str, str]:
+    def _filter_response_headers(
+        headers: Iterable[tuple[str, str]] | dict,
+    ) -> dict[str, str]:
         if hasattr(headers, "items"):
             items = headers.items()
         else:

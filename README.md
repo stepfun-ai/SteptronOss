@@ -55,3 +55,14 @@ cfg.sanity_check()
 print(cfg.to_dict())
 optim = cfg.optimizer_cfg.build(params)
 ```
+
+## Runtime environment
+
+Distributed rendezvous spins up a per-experiment Redis server using a shared
+filesystem directory.
+
+- `STEPTRON_MEET_DIR`: shared directory visible and writable by all nodes. It
+  stores the rendezvous file that publishes the Redis server port.
+- `CANNOT_BE_REDIS_SERVER=1`: set on ranks that must not start Redis (they will
+  wait for another rank to start it). If every rank sets this, rendezvous will
+  eventually time out.

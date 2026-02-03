@@ -1,128 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Literal, TypedDict
-
 import torch
-from configurize import Config, DataClass, Ref, writable_property
-
-from steptronoss.exp.base_exp import Megatron3DParallelModelConfig
-from steptronoss.tokenizer.hf_compat_tokenizer import HFCompatTokenizer
-
-if TYPE_CHECKING:
-    from vllm import RequestOutput, TokensPrompt
-
-    from steptronoss.core.generators.base_generator import BaseGenerator
-
-
-class SamplingParams(DataClass):
-    max_tokens: int
-    temperature: float
-    top_p: float
-    top_k: int
-    stop: list[str] | None
-    stop_token_ids: list[int] | None
-
-
-class MetaDict(TypedDict, total=False):
-    sampling_params: SamplingParams
-    multi_modal_data: dict
-
-
-class GenerationInput(DataClass):
-    input_ids: torch.IntTensor
-    """Prompt pass to Generator"""
-    prompt_id: int = None
-    """ID to identify which prompt this sample belong to."""
-    meta: MetaDict = MetaDict()
-    """Any other info to record, will be pass to GenerationOutput.meta"""
-
-
-class StopType:
-    MAX_LEN = 1
-    MAX_DECODE = 2
-    STOP_TOKEN = 3
-    STOP_STRING = 4
-    STOP_PARTIAL = 5
-
-
-class GenerationOutput(DataClass):
-    """St: Seqlen of trajectory
-    Sr: Seqlen of response
-    """
-
-    trajectory: torch.LongTensor = None
-    "Prompt+Generated, Long, (St, )"
-    logprobs: torch.FloatTensor = None
-    "Sample Logprob for Generated, Float32, (Sr, )"
-    is_gen_mask: torch.BoolTensor = None
-    "Mask for trajectory, Bool, (St, )"
-
-    stop_type: int = None
-    "How this rollout stoped, one of StopType"
-
-    prompt_id: int = None
-
-    meta: dict = None
-    """Meta info from GenInput"""
-
-
-class PartialRolloutConfig(Config):
-    enabled = False
-
-    prompt_level_filter = False
-    """Filter partial rollouts by prompt level"""
-
-    stop_by_decode_len = None
-    """Stop a sequence by its decode length"""
-
-    stop_by_bs = None
-    """Stop current batch when active_cache_size <= stop_by_bs * peak_active_cache_size"""
-
-    min_decode_len = None
-    """When using stop_by_bs, a sequence will be stopped only if its decode length >= min_decode_len.
-    This helps limiting the maximum staleness.
-    """
-
-    max_num_partial_turns = None
-    """Maximum number of turns the decode can be split into. Must be set in conjunction with
-    min_decode_len. For example, when max_decode_steps=24k, set max_num_partial_turns to 2
-    and min_decode_len to 12k.
-    """
-
-    verbose = False
-    """Verbose logging for partial rollout"""
-
-    def sanity_check(self):
-        super().sanity_check()
-        if not self.enabled:
-            return
-        if self.stop_by_bs is None and self.stop_by_decode_len is None:
-            assert False, "No partial rollout stop condition provided"
-
-    def record_metrics(self, metrics, full_rollouts, partial_rollouts):
-        if not self.enabled:
-            return
-        metrics.partial_remaining_samples.add(len(partial_rollouts))
-
-        for genout in full_rollouts:
-            partial_rollout_attr = genout.meta.get("partial_rollout_attr", {})
-            metrics.partial_turns_mean.add(partial_rollout_attr.get("partial_rollout_times", 0))
-            metrics.partial_turns_max.add(partial_rollout_attr.get("partial_rollout_times", 0))
-            partial_rollout_tokens = partial_rollout_attr.get("partial_rollout_tokens", [])
-            if len(partial_rollout_tokens) < self.max_num_partial_turns - 1:
-                partial_rollout_tokens = [0] * (
-                    self.max_num_partial_turns - 1 - len(partial_rollout_tokens)
-                ) + partial_rollout_tokens
-            for turn, token_len in enumerate(partial_rollout_tokens):
-                metrics.partial_rollout_mean_tokens_in_turn.add(
-                    token_len, subname=f"{self.max_num_partial_turns - 1 - turn}"
-                )
+from configurize import Config, Ref
 
 
 class BaseInferenceConfig(Config):
-    parallel_cfg = InferParallelConfig
-    partial_rollout_cfg = PartialRolloutConfig
 
     max_seq_len: int = 65536
     """Length of total seqlen in inferengine (prefill + decode)"""
@@ -135,178 +17,242 @@ class BaseInferenceConfig(Config):
     top_p: float = 1.0
     top_k: int = 0
 
-    eos_id: int | list[int] = []
+    eos_ids: list[int] = []
     """stop if tokens[-1] == eos_id. (work for generate only)"""
     stop_strings: str | list[str] = []
     """stop if trajectory.endswith(any_of(stop_string))"""
 
-    @writable_property
-    def eos_ids(self) -> list[int]:
-        if self.eos_id is None:
-            return []
-        elif isinstance(self.eos_id, int):
-            return [self.eos_id]
-        return self.eos_id
-
     shuffle_all_samples = True
     """shuffle all generated samples after finish generation."""
 
-    partial_rollout_cfg = PartialRolloutConfig
-    enable_partial_rollout = False
+
+class VLLMDeployResourceConfig(Config):
+    cpu: int = 32
+    gpu: int = 4
+    mem_gb: int = 80
+    image: str = None
+    replica: int = 1
+
+    envs: dict = {}
 
 
-class VLLMInferenceConfig(BaseInferenceConfig):
+class VLLMDeployConfig(BaseInferenceConfig):
+    """Config you need to deploy a vllm server."""
+
+    resource_cfg: VLLMDeployResourceConfig = VLLMDeployResourceConfig
+    router_addr_key: str = "default"
+    """Key in exp redis that stores router addr & port."""
+
     model_config_path: str
 
-    build_tokenizer: Callable[[], HFCompatTokenizer] = Ref("...tokenizer_cfg.build_tokenizer")
+    load_weight_from_config_path: bool = True
 
-    @writable_property
-    def tokenizer_path(self):
-        if isinstance(self.build_tokenizer, Callable):
-            tokenizer = self.build_tokenizer()
-            if isinstance(tokenizer, HFCompatTokenizer):
-                return tokenizer.hf_path
-            elif hasattr(tokenizer, "name_or_path"):
-                return tokenizer.name_or_path
+    tokenizer_path: str = Ref(".model_config_path")
 
-        return self.model_config_path
+    vllm_tp: int = 8
+    vllm_pp: int = 1
 
-    vllm_gpu_memory_utilization: float = 0.8  # Tune this to avoid OOM
-    """The fraction of GPU memory to use for vLLM."""
+    vllm_dp: int = 1
+    """Attention data parallel size; useful for deepseek v3 series of model; default to 1"""
+    enable_expert_parallel: bool = False
+    """If True, will do expert parallel inference (for MoE models). EP=(TPxDP) by default for vllm."""
 
-    vllm_dtype: str = "bfloat16"  # Better use this
-    """The data type to use for vLLM."""
-
-    vllm_trust_remote_code: bool = True  # If not download, can be set to False
-    """Trust remote code from huggingface."""
-
+    vllm_gpu_memory_utilization: float = 0.95
     vllm_enable_chunked_prefill: bool = True  # Better enable chunked prefill
     """If set, the prefill requests can be chunked based on the
     max_num_batched_tokens."""
 
+    vllm_max_num_batched_tokens: int = 8192
+
     vllm_enable_prefix_caching: bool = True  # Better enable prefix caching
     """Enable automatic prefix caching for vLLM."""
-
-    vllm_mtp_num_tokens: int = 0
-    """Enable MTP for vllm(aka draft model), trigger if > 0."""
-    vllm_mtp_method: Literal["step4_mtp"] = "step4_mtp"
 
     vllm_enforce_eager: bool = False  # Better disable eager mode
     """Enforce eager mode for vLLM. This means it won't compile the cuda graph
     to fuse operator requests."""
 
-    vllm_engine_init_seed: int = 42
-    """The seed to use for initialize the vLLM engine."""
+    vllm_trust_remote_code: bool = True
+    """Trust remote code for vLLM."""
+
+    enable_auto_tool_choice: bool = False
+    toolcall_parser: str = None  # "hermes"
+    quantize: str = None  # "groupwise-quant"
+    block_size: int = None
+    enable_log_requests: bool = False
+
+    enable_reasoning: bool = False
+    reasoning_parser: str = None  # "deepseek_r1"
+
+    model_name: str = None
+    hot_path: str = None
 
     vllm_hf_overrides: dict = {}
     """The hf_overrides to use to override the model config in huggingface for vLLM."""
 
-    enable_train_infer_consistency_check: bool = True
-    """If True, check the consistency between train and infer config."""
-
-    train_infer_consistency_check_items: list[str] = ["yarn"]
-    """The items to check the consistency between train and infer config."""
-
     vllm_sampling_params: dict = {}
     """The sampling params to use for vLLM."""
 
-    vllm_compilation_config: dict = {}
-    """The compilation config to use for vLLM."""
+    vllm_mtp_num_tokens: int = 0
+    vllm_mtp_method: str = ""
+    """The method to use for vLLM MTP."""
 
-    vllm_perf_log_interval: int = 10
-    """The interval (seconds) to log the performance of vLLM. Set to 0 to disable logging."""
+    def sanity_check(self):
+        """Validate configuration parameters.
 
-    def load_weight_for_vllm_model(self, model: torch.nn.Module, state_dict: dict):
-        """Customizable function to indicate how to load weight for vllm model."""
-        return model.load_state_dict(state_dict, strict=True)
+        Validates that resource_cfg.gpu is evenly divisible by inference_tp.
+        This ensures mp_run can create equal-sized processes.
 
-    def adapt_vllm_input(self, gen_input: GenerationInput) -> TokensPrompt:
-        from vllm import TokensPrompt
+        Examples:
+        - ✓ gpu=8, inference_tp=2: 8 % 2 = 0 (4 processes)
+        - ✓ gpu=8, inference_tp=4: 8 % 4 = 0 (2 processes)
+        - ✓ gpu=8, inference_tp=8: 8 % 8 = 0 (1 process, standard deployment)
+        - ✗ gpu=8, inference_tp=3: 8 % 3 ≠ 0 (invalid)
+        """
+        super().sanity_check()
 
-        input_ids = gen_input.input_ids
-        if hasattr(input_ids, "tolist"):
-            input_ids = input_ids.tolist()
-        return TokensPrompt(prompt_token_ids=input_ids)
+        if self.enable_auto_tool_choice:
+            assert self.toolcall_parser
 
-    def adapt_vllm_output(self, vllm_output: RequestOutput, meta: dict) -> list[GenerationOutput]:
-        """vLLM nest multi output in vout.outputs, we return list here"""
-        outputs = []
-        for single_output in vllm_output.outputs:
-            trajectory = vllm_output.prompt_token_ids + single_output.token_ids
-            is_gen_mask = [0] * len(vllm_output.prompt_token_ids) + [1] * len(single_output.token_ids)
+        # Validate that GPU count is evenly divisible by inference_tp
+        assert self.resource_cfg.gpu % (self.vllm_tp * self.vllm_dp) == 0, (
+            f"resource_cfg.gpu ({self.resource_cfg.gpu}) must be evenly divisible by "
+            f"inference_tp ({self.vllm_tp}) * vllm_data_parallel_size ({self.vllm_dp}). "
+            f"Current: {self.resource_cfg.gpu} % ({self.vllm_tp}*{self.vllm_dp}) = "
+            f"{self.resource_cfg.gpu % (self.vllm_tp * self.vllm_dp)} (should be 0). "
+            f"This ensures each mp_run process gets equal GPUs. "
+            f"Valid inference_tp values for {self.resource_cfg.gpu} GPUs: "
+            f"{[i for i in range(1, self.resource_cfg.gpu + 1) if self.resource_cfg.gpu % i == 0]}"
+        )
 
-            if single_output.finish_reason == "length":
-                stop_type = StopType.MAX_LEN
-            elif single_output.finish_reason == "partial":
-                stop_type = StopType.STOP_PARTIAL
-            else:
-                last_token_id = trajectory[-1]
-                if last_token_id in self.eos_ids:
-                    stop_type = StopType.STOP_TOKEN
-                else:
-                    stop_type = StopType.STOP_STRING
+    def run_as_worker(self):
+        """Run a vllm controller that deploy a vllm server and register it to exp-router."""
+        from steptronoss.generation.vllm.vllm_controller import VLLMController
 
-            # Organize the logprobs
-            logprobs = []
-            for token_logprob in single_output.logprobs:
-                logprobs.append(next(iter(token_logprob.values())).logprob)
-            if "vllm_output" in meta:
-                meta["vllm_output"] = single_output
+        controller = VLLMController(cfg=self)
+        controller.start()
 
-            gen_output = GenerationOutput(
-                prompt_id=meta.pop("prompt_id"),
-                trajectory=torch.tensor(trajectory, dtype=torch.long),
-                logprobs=torch.tensor(logprobs, dtype=torch.float32),
-                is_gen_mask=torch.tensor(is_gen_mask, dtype=torch.bool),
-                stop_type=stop_type,
-                meta=meta,
+    def build_cli(self):
+        """Build a VLLM client that talks to the exp router."""
+        from steptronoss.generation.vllm.vllm_client import VLLMClient
+
+        return VLLMClient(cfg=self)
+
+    def get_entrypoint_command_and_envs(self):
+
+        import json
+
+        envs = self.resource_cfg.envs.copy()
+
+        cmd = [
+            f"vllm serve",
+            f"{self.model_config_path}",
+            "--port $PORT_SERVING",
+            f"--served-model-name {self.model_name}",
+            f"--max-model-len {self.max_seq_len}",
+            f"--tensor-parallel-size {self.vllm_tp}",
+            f"--gpu-memory-utilization {self.vllm_gpu_memory_utilization}",
+            f"--max-num-seqs {self.max_cache_size}",
+            f"--data-parallel-size {self.vllm_dp}",
+            f"--max-num-batched-tokens {self.vllm_max_num_batched_tokens}",
+            "--disable-cascade-attn",  # might meet cuda IMA error when using cascade attention
+        ]
+        if self.vllm_hf_overrides:
+            overrides = json.dumps(self.vllm_hf_overrides)
+            envs["HF_OVERRIDES"] = f"'{overrides}'"
+            cmd.append(f"--hf-overrides $HF_OVERRIDES")
+        if self.tokenizer_path:
+            cmd.append(f"--tokenizer {self.tokenizer_path}")
+        if self.vllm_trust_remote_code:
+            cmd.append("--trust-remote-code")
+        if self.toolcall_parser:
+            cmd.append("--enable-auto-tool-choice")
+            cmd.append(f"--tool-call-parser {self.toolcall_parser}")
+        if self.reasoning_parser:
+            cmd.append(f"--reasoning-parser {self.reasoning_parser}")
+        if not self.load_weight_from_config_path:
+            cmd.append("--load-format dummy")
+        if self.vllm_enable_chunked_prefill:
+            cmd.append("--enable-chunked-prefill")
+        if self.vllm_enforce_eager:
+            cmd.append("--enforce-eager")
+        if self.enable_auto_tool_choice:
+            cmd.append("--enable-auto-tool-choice")
+        # if self.enable_reasoning:
+        #     cmd.append("--enable-reasoning")
+        if not self.vllm_enable_prefix_caching:
+            cmd.append("--no-enable-prefix-caching")
+        if self.quantize:
+            cmd.append(f"--quantization {self.quantize}")
+        if self.block_size:
+            cmd.append(f"--block-size {self.block_size}")
+        if self.enable_log_requests:
+            cmd.append("--enable-log-requests")
+        if self.enable_expert_parallel:
+            cmd.append("--enable-expert-parallel")
+        if self.vllm_mtp_num_tokens > 0:
+            vllm_speculative_config = json.dumps(
+                {
+                    "num_speculative_tokens": self.vllm_mtp_num_tokens,
+                    "method": self.vllm_mtp_method,
+                }
             )
-            outputs.append(gen_output)
-        return outputs
+            envs["SPECULATIVE_CONFIG"] = f"'{vllm_speculative_config}'"
+            cmd.append("--speculative-config $SPECULATIVE_CONFIG")
 
+        cmd = " ".join(cmd)
 
-class RolloutManagerConfig(Config):
-    sample_per_prompt: int = Ref("..sample_per_prompt")
+        return cmd, envs
 
-    balance_prompts_to_all_ranks: bool = True
-    """If set, balance prompts to all ranks (N_gpu), otherwise keep as it is.
-    - rank0 -> run([0, 1, 2, 3]) -balance-> [0, 1, 2]
-    - rank1 -> run([4, 5])       -balance-> [3, 4, 5]
-    """
+    def deploy_train_model(self, models: list[torch.nn.Module]):
 
-    auto_balance_infer_dp: bool | float = 1.0
-    """Automatically balance prompts when sending to inference DP. Each prompt
-    will be sent to inference DP that receives the least number of prompts.
-    - Set to True to force balance for all prompts.
-    - Set to a float value (0.0~1.0) to randomly balance a fraction of
-      prompts. Rest prompts will be sent to default queue that is shared
-      by all inference DPs, just like the default behavior.
-    - Set to 0 or False to disable auto balance.
-    """
+        from steptronoss.checkpointing.hf_checkpoint import dump_safetensors
+        from steptronoss.core.parallel_state import PM
 
-    build_tokenizer = Ref("...tokenizer_cfg.build_tokenizer", None)
+        cli = self.build_cli()
 
-    def build_rollout_manager(self):
-        from steptron.core.rollout_managers import AsyncRolloutManager
+        dump_safetensors(
+            save_path=self.hot_path,
+            model_reference_path=self.model_config_path,
+            tokenizer_reference_path=self.tokenizer_path,
+            models=models,
+        )
 
-        return AsyncRolloutManager(cfg=self)
+        if PM.world_rank == 0:
+            cli.wait_for_server()
+            cli.reload_weights(self.hot_path)
 
+        cli.wait_for_server()
 
-class InferencableModelConfig(Megatron3DParallelModelConfig):
-    inference_config = VLLMInferenceConfig
-    """Config for InferEngine, Sub[CacheCfg, OptimusModelCfg]"""
+    def get_sampling_params(self, override_params: dict = {}):
 
-    def build_generator(self) -> BaseGenerator:
-        from steptron.core.generators.vllm_generator import VLLMGenerator
+        # Handle top_k
+        self.top_k = self.top_k
+        if self.top_k <= 0:
+            self.top_k = -1
 
-        return VLLMGenerator(self.inference_config)
+        # Handle stop strings
+        stop_strings = self.stop_strings
+        if stop_strings is not None:
+            if isinstance(stop_strings, str):
+                stop_strings = [stop_strings]
+            if isinstance(stop_strings, list) and len(stop_strings) == 0:
+                stop_strings = None
 
-    def get_infer_weight(self, models: list) -> dict[str, torch.Tensor]:
-        from steptron.utils import unwrap_model
+        # Handle stop token ids
+        eos_ids = self.eos_ids
+        if len(eos_ids) == 0:
+            eos_ids = None
 
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-        infer_weight = {}
-        for model in models:
-            infer_weight.update(unwrap_model(model).export_infer_weight(self.inference_config))
-        return infer_weight
+        sampling_params = dict(
+            temperature=self.temperature,
+            top_p=self.top_p,
+            top_k=self.top_k,
+            stop=stop_strings,
+            stop_token_ids=eos_ids,
+            n=1,  # disable multi rollout
+            logprobs=0,  # Only return logits for the decode token
+            ignore_eos=True,
+        )
+        sampling_params.update(self.vllm_sampling_params)
+        sampling_params.update(override_params)
+        return sampling_params

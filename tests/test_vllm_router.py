@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from steptronoss.generation.vllm_utils import VLLMRouter, VLLMRouterConfig
+from steptronoss.generation.vllm.vllm_router import VLLMRouter, VLLMRouterConfig
 
 pytestmark = pytest.mark.cpu
 
@@ -41,8 +41,8 @@ class _FakeSession:
 
 def _build_router(monkeypatch, upstream):
     cfg = VLLMRouterConfig()
-    cfg.endpoints = ["127.0.0.1:8000"]
     router = VLLMRouter(cfg)
+    router.register("127.0.0.1:8000")
 
     async def _get_session():
         return _FakeSession(upstream)

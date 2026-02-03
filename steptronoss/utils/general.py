@@ -467,3 +467,25 @@ def require_package(package: str):
     if version.parse(current_version) < version.parse(required_version):
         raise RuntimeError(f"{package} >= {required_version} required but got {current_version}!")
     return True
+
+
+def get_my_ip() -> str:
+    import socket
+
+    return socket.gethostbyname(socket.getfqdn(socket.gethostname()))
+
+
+def get_free_port() -> int:
+    """Randomly select an open port in 40000-65535, retrying if occupied."""
+    import random
+    import socket
+
+    for _ in range(50):
+        port = random.randint(40000, 65535)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError("Failed to allocate a free port!")
