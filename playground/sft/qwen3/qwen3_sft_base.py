@@ -5,11 +5,27 @@ from steptronoss.exp.base_exp import (
 from steptronoss.exp.checkpointing import CheckpointConfig
 from steptronoss.exp.lr_schedulers import ConstantSchedulerConfig
 from steptronoss.exp.ntp import NTPTrainerConfig, PretrainMetricConfig
+from steptronoss.exp.resources import TorchrunResourceConfig
 from steptronoss.exp.sft import SFTExp
+
+
+class OneNodeResourceConfig(TorchrunResourceConfig):
+    def __init__(self):
+        super().__init__()
+        self.replica = 1
+        self.gpu = 8
+        self.mounts.extend(
+            [
+                "juicefs+s3://oss.i.shaipower.com/step2-alignment-jfs:/mnt/step2-alignment-jfs",
+                "juicefs+s3://oss.i.shaipower.com/tenant:/mnt/shared-storage/tenant",
+            ]
+        )
 
 
 class Exp(SFTExp):
     log_dir = "./tensorboard_logs/"
+
+    resource_cfg = OneNodeResourceConfig
 
     trainer_cfg = NTPTrainerConfig
     optimizer_cfg = GradientManagerConfig

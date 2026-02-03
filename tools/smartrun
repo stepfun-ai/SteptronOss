@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""
+A smart version of torchrun based on exp_redis (STEPTRON_MEET_DIR)
+Usage:
+# replace
+torchrun --nnodes 2 --nproc-per-node 8 --master-addr xxx --master-port xxx your_exp.py
+# with
+NNODES=2 tools/smartrun your_exp.py
+"""
+import os
+import socket
+import sys
+import time
+
+import torch
+
+from steptronoss.utils.comm_utils import get_exp_redis
+
+
+class RlaunchDistibuteManager:
+    def __init__(self):
+        self.nr_gpus = torch.cuda.device_count()
+        self.proc_per_node = max(self.nr_gpus, 1)
+
+        self.exp_id = str(os.environ["EXP_ID"]).replace("/", "_")
+
+        self.num_nodes = int(os.environ.get("NNODES", 1))
+
+        self.synchronize()
+
+    def synchronize(self):
+        exp_redis = get_exp_redis()
+        rdzvs_key = f"SMARTRUN_RDZVS_{self.exp_id}"
+        my_addr = socket.gethostbyname(socket.getfqdn(socket.gethostname()))
+        exp_redis.rpush(rdzvs_key, my_addr)
+
+        self.master_addr = exp_redis.lrange(rdzvs_key, 0, 1)[0].decode()
+        self.master_port = os.environ.get("MASTER_PORT", 12345)
+        self.master_uri = f"tcp://{self.master_addr}:{self.master_port}"
+
+        self.is_master = self.master_addr == my_addr
+
+        ready = False
+        while not ready:
+            node_ready = exp_redis.llen(rdzvs_key)
+            if self.is_master:
+                print(
+                    f"\033[33m{node_ready} / {self.num_nodes} Nodes Ready.\033[0m",
+                    flush=True,
+                )
+            if node_ready == self.num_nodes:
+                ready = True
+            else:
+                time.sleep(5)
+
+        all_addrs = exp_redis.lrange(rdzvs_key, 0, -1)
+        all_addrs = [x.decode() for x in all_addrs]
+
+        self.node_rank = all_addrs.index(my_addr)
+        if self.is_master:
+            exp_redis.expire(rdzvs_key, 60)  # expire after 1 minute
+
+
+def DISPATCH_TORCHRUN():
+    """
+    torchrun
+    --nnodes 2
+    --nproc_per_node 8
+    --node_rank 1
+    --master_addr 100.96.57.172
+    --master_port 12345
+    nlp_example.py
+    """
+    self_filename = os.path.basename(__file__)
+    cmd = "|<and>|".join(sys.argv)
+    cmd = cmd[cmd.index(self_filename) + len(self_filename) + len("|<and>|") :]
+    cmd = cmd.split("|<and>|")
+    cmd.insert(0, "torchrun")
+    m = RlaunchDistibuteManager()
+    dist_args = f"--nnodes {m.num_nodes}\
+        --nproc_per_node {m.proc_per_node}\
+        --node_rank {m.node_rank}\
+        --master_addr {m.master_addr}\
+        --master_port {m.master_port}".split()
+    cmd = cmd[:1] + dist_args + cmd[1:]
+    cmd = " ".join(cmd)
+    print(f"Modified Command:\n\033[32m{cmd}\033[0m", flush=True)
+    os.system(cmd)
+
+
+DISPATCH_TORCHRUN()

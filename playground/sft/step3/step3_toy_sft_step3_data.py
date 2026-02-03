@@ -4,8 +4,6 @@ from playground.data.sft.reasoning_GCMKSTIDF_sft_stage1_1203_compile_step3 impor
 from playground.pretrain.step3p5.step3p5_toy import Step3p5ToyModelConfig
 from playground.sft.qwen3.qwen3_sft_base import Exp as BaseExp
 
-# sys.excepthook = lambda a, b, c: [print("HoldOneError"), time.sleep(3600)]
-
 
 class Exp(BaseExp):
     model_cfg = Step3p5ToyModelConfig
