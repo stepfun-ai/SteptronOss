@@ -41,6 +41,8 @@ Not every interaction needs an improvement pass. But for **key tasks**, do an Im
 - Pretrain config notes: pretrain configs live under `playground/pretrain/`; `step3p5_flash.py` defines the Qwen3 config used in recent edits.
 - Pretrain edit guardrails: when translating a full `ModelConfig` into `step3p5_flash.py`, update only existing attributes; some keys map indirectly (e.g., `disable_qk_norm` ↔ `use_qk_norm` inverted, `use_swiglu_limit` ↔ `swiglu_limit`). If you change `num_layers`, keep any layer-wise lists in sync (e.g., `qk_rope_head_dim`, `rope_theta`, `use_fused_qknorm_and_rope`, `use_swiglu_limit`/`use_swiglu_limit_shared`).
 - Tooling note: `rg` may be unavailable in this environment; fall back to `find`/`grep` for repo-wide search.
+- Experiment sanity: after creating/modifying a new experiment, run configurize `cfshow` to view the Config Tree; it also validates imports and runs `sanity_check()`. This usually requires activating the StepTron venv (typically `./.venv/`).
+- Experiment diff: `cfshow` can compare two experiments; after creating experiment B based on experiment A, always use `cfshow` diff to verify the changes.
 - Test running note: `python` may be missing and `python3` may not have `pytest` installed; use project tooling if available.
 - GPU note: this environment has no worker/GPU access; avoid running GPU-only tests here.
 - Tests note: `@pytest.mark.node2` tests should be marked non-parallel with `pytest.mark.xdist_group("torchrun")` (see `tests/test_moe_layers.py` pattern).
