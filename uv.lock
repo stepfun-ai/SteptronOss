@@ -845,15 +845,15 @@ wheels = [
 
 [[package]]
 name = "configurize"
-version = "0.1.7"
+version = "0.1.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fire" },
     { name = "loguru" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/71/5be20f59c1cfdd4d4d3bd72f3f29de9b1641409e5b2c5ef655057db0c80f/configurize-0.1.7.tar.gz", hash = "sha256:6512c685ad2fb9cc9e5171ee70dfc7e86853118b38fd2b4c552e5337da3e86e6", size = 18962, upload-time = "2026-01-27T04:53:44.223Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/d2/a08cf3817f994b82f923e0031ed331ba18eccafde2f9269b655c7886a4ad/configurize-0.1.9.tar.gz", hash = "sha256:6a744a8a9aea3a8fc24fbf5dffe9d2b2017732f34418fa7354536a2434eb72a3", size = 19229, upload-time = "2026-02-03T13:54:55.054Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/48/6ba8f9068af77fc75b0efc4a4d03d8aec5fee76924fb2e3dacf7a3c0bd6d/configurize-0.1.7-py3-none-any.whl", hash = "sha256:54dced59fdd77834d2821f1ee30c9a9ebe83b59074912dece99ae9d01a1456cf", size = 20213, upload-time = "2026-01-27T04:53:42.855Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/b5/2460007e55384da626a0c37ff67e6006e13f7c405a1dd5a2a133806fceb5/configurize-0.1.9-py3-none-any.whl", hash = "sha256:da0eaeeef54a21c360b513492c6754250520002f7c7ddda31d46e8610bd19cc8", size = 20499, upload-time = "2026-02-03T13:54:53.567Z" },
 ]
 
 [[package]]
@@ -5706,7 +5706,7 @@ requires-dist = [
     { name = "aiohttp" },
     { name = "aioredis" },
     { name = "boto3" },
-    { name = "configurize" },
+    { name = "configurize", specifier = "==0.1.9" },
     { name = "einops" },
     { name = "fastapi" },
     { name = "hjson" },
