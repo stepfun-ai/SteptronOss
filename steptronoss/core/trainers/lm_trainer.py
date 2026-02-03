@@ -407,7 +407,12 @@ class DecoderPretrainTrainer(BaseTrainer):
 
         # Broadcast to all ranks using world group
         num_samples_tensor = torch.tensor([local_num_samples], dtype=torch.long, device="cuda")
-        torch.distributed.broadcast(num_samples_tensor, src=0)
+
+        # Dynamically determine the source rank for broadcast
+        # Data source rank is PP=0||PP=-1 && TP=0 && CP=0
+        # Get the global rank corresponding to PP group rank 0
+        data_source_rank = mpu.PM.ranks_of("PP")[0]
+        torch.distributed.broadcast(num_samples_tensor, src=data_source_rank)
         num_packed_samples = num_samples_tensor.item()
 
         # Compute train_iters (same for all ranks)
