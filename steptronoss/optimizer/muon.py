@@ -77,9 +77,6 @@ class Muon(torch.optim.Optimizer):
 
     @torch.no_grad()
     def step(self):
-        # NOTE: Historically required for sharded_tensor_config correctness in older torch.
-        # Keep in 2.8 for safety; can be removed if verified unnecessary.
-        torch.cuda.synchronize()
         has_muon_param = False
 
         for group_id, group in enumerate(self.param_groups):
