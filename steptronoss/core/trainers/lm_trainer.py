@@ -117,9 +117,11 @@ class DecoderPretrainTrainer(BaseTrainer):
         ## Dataloader
         self.train_data_iterators = self.build_dataloader(self.exp.data_cfg)
         if self.exp.trainer_cfg.train_iters is None:
-            self.exp.scheduler_cfg.total_schedule = self.train_iters = self._compute_and_broadcast_train_iters()
+            self.train_iters = self._compute_and_broadcast_train_iters()
         else:
             self.train_iters = self.exp.trainer_cfg.train_iters
+
+        if self.exp.scheduler_cfg.total_schedule is None:
             self.exp.scheduler_cfg.total_schedule = self.train_iters
 
         if "data" in state_dicts:
