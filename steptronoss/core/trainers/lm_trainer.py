@@ -116,7 +116,11 @@ class DecoderPretrainTrainer(BaseTrainer):
 
         ## Dataloader
         self.train_data_iterators = self.build_dataloader(self.exp.data_cfg)
-        self._compute_and_broadcast_train_iters()
+        if self.exp.trainer_cfg.train_iters is None:
+            self.exp.scheduler_cfg.total_schedule = self.train_iters = self._compute_and_broadcast_train_iters()
+        else:
+            self.train_iters = self.exp.trainer_cfg.train_iters
+            self.exp.scheduler_cfg.total_schedule = self.train_iters
 
         if "data" in state_dicts:
             for dl in self.train_data_iterators:
@@ -393,7 +397,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         sync_point("after dataloaders are built")
         return train_data_iterators
 
-    def _compute_and_broadcast_train_iters(self):
+    def _compute_and_broadcast_train_iters(self) -> int:
         """Compute train_iters from data source rank and broadcast to all ranks.
 
         Since only data source ranks (PP=0||PP=-1 && TP=0 && CP=0) build dataloaders,
@@ -416,13 +420,14 @@ class DecoderPretrainTrainer(BaseTrainer):
         num_packed_samples = num_samples_tensor.item()
 
         # Compute train_iters (same for all ranks)
-        self.train_iters = num_packed_samples // self.exp.trainer_cfg.global_batch_size
-        self.exp.scheduler_cfg.total_schedule = self.train_iters
+        train_iters = num_packed_samples // self.exp.trainer_cfg.global_batch_size
 
         logger.info(
-            f"Will train for {self.train_iters} iters.",
+            f"Will train for {train_iters} iters.",
             at=0,
         )
+
+        return train_iters
 
     # Checkpointing:
     def set_autoresume(self):
