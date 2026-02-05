@@ -2,9 +2,6 @@
 Toy setting for step3.5 flash, same feature, toy size.
 """
 
-import torch
-from configurize import Ref
-
 from playground.pretrain.step3p5.step3p5_flash import Step3p5FlashModelConfig
 
 """

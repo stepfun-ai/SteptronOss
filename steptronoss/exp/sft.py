@@ -8,7 +8,6 @@ from steptronoss.exp.base_exp import (
     BaseExp,
     DataConfig,
     GradientManagerConfig,
-    Megatron3DParallelModelConfig,
     ProfilerConfig,
 )
 from steptronoss.exp.checkpointing import CheckpointConfig

@@ -4,7 +4,7 @@ import multiprocessing as mp
 import queue
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 import torch
 from loguru import logger
@@ -30,7 +30,7 @@ class PrefetchMuxInputMultiProcessQueue:
         mux_size: int = 1,
         queue_size: int = 0,
         pin_memory: bool = True,
-        alternative_queue_list: Optional[list[Any]] = None,
+        alternative_queue_list: list[Any] | None = None,
     ) -> None:
         """A multi-in, single-out multiprocess queues group with prefetch."""
         if alternative_queue_list is not None:
@@ -51,7 +51,7 @@ class PrefetchMuxInputMultiProcessQueue:
         )
         self._prefetch_thread.start()
 
-    def _get_one_data(self, block: bool = True, timeout: Optional[float] = None) -> Any:
+    def _get_one_data(self, block: bool = True, timeout: float | None = None) -> Any:
         self.idx = (self.idx + 1) % self.mux_size
         if self.input_queues[self.idx].empty():
             logger.info(f"InputQueue {self.idx} is empty")
@@ -88,7 +88,7 @@ class PrefetchMuxInputMultiProcessQueue:
             logger.exception("Error when prefetching data:")
             self.prefetch_output_queue.put(e)
 
-    def get(self, block: bool = True, timeout: Optional[float] = None) -> Any:
+    def get(self, block: bool = True, timeout: float | None = None) -> Any:
         if not self.prefetch_output_queue.empty():
             return self.prefetch_output_queue.get(block=block, timeout=timeout)
         logger.warning("Prefetch queue is empty.")
@@ -133,10 +133,10 @@ class AsyncAcceleratedSlowFast(SlowFastNextable):
         ```"""
         # super().__init__(*args, **kwargs)
         self.nextable: SlowFastNextable = slowfast
-        self._shadow_process: Optional[mp.Process] = None
-        self._data_process: Optional[list[mp.Process]] = None
-        self._data_queue: Optional[PrefetchMuxInputMultiProcessQueue] = None
-        self._shadow_worker_queues: Optional[tuple[Any, Any]] = None
+        self._shadow_process: mp.Process | None = None
+        self._data_process: list[mp.Process] | None = None
+        self._data_queue: PrefetchMuxInputMultiProcessQueue | None = None
+        self._shadow_worker_queues: tuple[Any, Any] | None = None
         self.queue_size = queue_size
 
         self.num_workers = num_workers

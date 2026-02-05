@@ -5,7 +5,7 @@
 import time
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import Any, Dict
+from typing import Any
 
 import torch
 from loguru import logger
@@ -15,7 +15,6 @@ from steptronoss.exp.base_exp import ProfilerConfig
 
 
 class TimerBase(ABC):
-
     def __init__(self, name):
         self.name = name
 
@@ -37,7 +36,6 @@ class TimerBase(ABC):
 
 
 class DummyTimer(TimerBase):
-
     def __init__(self):
         super().__init__("dummy timer")
 
@@ -54,11 +52,10 @@ class DummyTimer(TimerBase):
         return
 
     def elapsed(self, reset=True, barrier=False, sync_device=False):
-        raise Exception("dummy timer should not be used to " "calculate elapsed time")
+        raise Exception("dummy timer should not be used to calculate elapsed time")
 
 
 class Timer(TimerBase):
-
     def __init__(self, name, use_event):
         super().__init__(name)
         self._elapsed = 0.0
@@ -183,7 +180,7 @@ class LocalTimers(DummyTimers):
 
     def __init__(self, log_level, use_event=False):
         self._log_level = log_level
-        self._timers: Dict[str, Timer] = {}
+        self._timers: dict[str, Timer] = {}
         self._log_levels = {}
         self._dummy_timer = DummyTimer()
         self._max_log_level = 2
@@ -194,8 +191,8 @@ class LocalTimers(DummyTimers):
         # set it to the max log level which is 2.
         if log_level is None:
             log_level = self._log_levels.get(name, self._max_log_level)
-        assert log_level <= self._max_log_level, "log level {} is larger than max supported log level {}".format(
-            log_level, self._max_log_level
+        assert log_level <= self._max_log_level, (
+            f"log level {log_level} is larger than max supported log level {self._max_log_level}"
         )
         # Now if the input log level is larger than the one set for
         # the timers class, just ignore it and return a dummy timer.
@@ -206,10 +203,9 @@ class LocalTimers(DummyTimers):
         # is provided, it matches the one that the timer was created with.
         if name in self._timers:
             if log_level is not None:
-                assert (
-                    log_level == self._log_levels[name]
-                ), "input log level {} does not match already existing " "log level {} for {} timer".format(
-                    log_level, self._log_levels[name], name
+                assert log_level == self._log_levels[name], (
+                    f"input log level {log_level} does not match already existing "
+                    f"log level {self._log_levels[name]} for {name} timer"
                 )
             return self._timers[name]
 
@@ -228,7 +224,7 @@ class LocalTimers(DummyTimers):
         all_elapsed_times = {k: (v.elapsed(reset=reset) / normalizer) for k, v in self._timers.items()}
         all_elapsed_times = dict(
             filter(
-                lambda x: (self._log_levels[x[0]] >= 0 and x[1] > 0),
+                lambda x: self._log_levels[x[0]] >= 0 and x[1] > 0,
                 all_elapsed_times.items(),
             )
         )
@@ -286,7 +282,6 @@ GLOBAL_TIMERS: LocalTimers | DummyTimers = DummyTimers()
 
 
 class timeit(_DecoratorContextManager):
-
     def __init__(
         self,
         name=None,

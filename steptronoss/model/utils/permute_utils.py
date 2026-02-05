@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 import torch
 
 __all__ = [
@@ -15,7 +13,7 @@ __all__ = [
 ]
 
 
-def _pad_or_trim_indices(indices: torch.Tensor, num_out_tokens: int) -> Tuple[torch.Tensor, int]:
+def _pad_or_trim_indices(indices: torch.Tensor, num_out_tokens: int) -> tuple[torch.Tensor, int]:
     if num_out_tokens < 0:
         return indices, indices.numel()
     if num_out_tokens == indices.numel():
@@ -46,8 +44,8 @@ def _permute_mask_map(
     inp: torch.Tensor,
     routing_map: torch.Tensor,
     num_out_tokens: int,
-    probs: Optional[torch.Tensor],
-) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    probs: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     if inp.numel() == 0:
         empty = torch.tensor([], device=inp.device, dtype=torch.long)
         return inp, empty, None if probs is None else probs.new_empty((0,))
@@ -95,7 +93,7 @@ def _permute_index_map(
     inp: torch.Tensor,
     routing_map: torch.Tensor,
     num_out_tokens: int,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     if inp.numel() == 0:
         empty = torch.tensor([], device=inp.device, dtype=torch.long)
         return inp, empty
@@ -134,7 +132,7 @@ def moe_permute(
     num_out_tokens: int = -1,
     max_token_num: int = -1,
     map_type: str = "mask",
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Permute tokens based on routing_map using pure PyTorch."""
     del max_token_num
     if map_type == "index":
@@ -150,7 +148,7 @@ def moe_permute_with_probs(
     probs: torch.Tensor,
     routing_map: torch.Tensor,
     num_out_tokens: int = -1,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Permute tokens and probs based on routing_map using pure PyTorch."""
     output, row_id_map, permuted_probs = _permute_mask_map(inp, routing_map, num_out_tokens, probs)
     return output, permuted_probs, row_id_map
@@ -159,10 +157,10 @@ def moe_permute_with_probs(
 def moe_unpermute(
     inp: torch.Tensor,
     row_id_map: torch.Tensor,
-    merging_probs: Optional[torch.Tensor] = None,
-    restore_shape: Optional[torch.Size] = None,
+    merging_probs: torch.Tensor | None = None,
+    restore_shape: torch.Size | None = None,
     map_type: str = "mask",
-    probs: Optional[torch.Tensor] = None,
+    probs: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Unpermute tokens based on row_id_map using pure PyTorch."""
     if probs is not None:
@@ -259,7 +257,7 @@ def moe_sort_chunks_by_index_with_probs(
     probs: torch.Tensor,
     split_sizes: torch.Tensor,
     sorted_index: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Split inp and probs by split_sizes and reorder chunks by sorted_index."""
     if inp.numel() == 0:
         return inp, probs

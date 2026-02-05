@@ -2,7 +2,6 @@ import heapq
 from abc import abstractmethod
 
 import torch
-from loguru import logger
 
 from steptronoss.data.nextable import LazyUpdateNextable
 

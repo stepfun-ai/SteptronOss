@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterable, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 import torch
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
@@ -119,15 +120,15 @@ class GradientManager(ABC):
         pass
 
     @abstractmethod
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         pass
 
     @abstractmethod
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         pass
 
     @abstractmethod
-    def step(self) -> Tuple[bool, Optional[float], Optional[int]]:
+    def step(self) -> tuple[bool, float | None, int | None]:
         pass
 
     def _custom_allreduce(self, tag, group, op) -> None:

@@ -1,7 +1,8 @@
 """Iterator interfaces that support state save/restore and fast/slow steps."""
 
 from abc import ABCMeta, abstractmethod
-from typing import Any, Callable, Dict, Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 
 # Alias for items yielded by Nextable implementations.
 DataItem = object
@@ -19,12 +20,12 @@ class Nextable(metaclass=ABCMeta):
         raise NotImplementedError
 
     @abstractmethod
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         """Return a serializable snapshot of the iterator state."""
         raise NotImplementedError
 
     @abstractmethod
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Restore state previously produced by ``state_dict``."""
         raise NotImplementedError
 
@@ -80,7 +81,7 @@ class DPMux(SlowFastNextable):
         self.dp_rank = dp_rank
 
     def fast_step(self):
-        for i in range(self.dp_size):
+        for _i in range(self.dp_size):
             self.nextable.fast_step()
 
     def __next__(self):

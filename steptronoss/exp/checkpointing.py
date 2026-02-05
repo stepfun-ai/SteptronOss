@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import weakref
-from typing import Optional
 
 from configurize import Config, Ref, writable_property
 
@@ -29,12 +27,12 @@ class SaveOptions(Config):
         self.data = True
         self.rng_state = True
 
-    def all(self, but: list[str] = []) -> "SaveOptions":
+    def all(self, but: list[str] = []) -> SaveOptions:
         for k, _ in self.items():
             setattr(self, k, k not in but)
         return self
 
-    def none(self, but: list[str] = []) -> "SaveOptions":
+    def none(self, but: list[str] = []) -> SaveOptions:
         for k, _ in self.items():
             setattr(self, k, k in but)
         return self
@@ -53,7 +51,7 @@ class LoadOptions(SaveOptions):
 class CheckpointConfig(Config):
     auto_resume: bool
 
-    load_path: Optional[str]
+    load_path: str | None
 
     save_dir: str
 
@@ -82,9 +80,9 @@ class CheckpointConfig(Config):
     reshard_optimizer_strict: bool
 
     # for save_safetensors reference
-    model_config_path: Optional[str]
+    model_config_path: str | None
 
-    tokenizer_path: Optional[str]
+    tokenizer_path: str | None
 
     @writable_property
     def save_path(self) -> str:
@@ -92,9 +90,9 @@ class CheckpointConfig(Config):
 
     def sanity_check(self) -> None:
         super().sanity_check()
-        assert not (
-            self.load_safetensors and self.load_path
-        ), "load_safetensors and load_path cannot be set at the same time"
+        assert not (self.load_safetensors and self.load_path), (
+            "load_safetensors and load_path cannot be set at the same time"
+        )
 
     def __init__(self):
         super().__init__()

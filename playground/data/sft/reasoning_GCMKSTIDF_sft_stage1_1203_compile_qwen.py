@@ -98,12 +98,10 @@ class Step3SFTDataQwenTokenizedConfig(SFTDataConfig):
             padding_size = self.seqlen_divisible_by - size % self.seqlen_divisible_by
 
             padding_tensor = np.zeros(padding_size + 1)
-            pieces.append(
-                {
-                    "tokens": padding_tensor,
-                    "loss_mask": padding_tensor,
-                }
-            )
+            pieces.append({
+                "tokens": padding_tensor,
+                "loss_mask": padding_tensor,
+            })
 
         sizes = torch.tensor([len(s["tokens"]) - 1 for s in pieces])
         from torch import tensor as T
@@ -112,12 +110,10 @@ class Step3SFTDataQwenTokenizedConfig(SFTDataConfig):
         labels = torch.cat([T(s["tokens"][1:], dtype=torch.long) for s in pieces])
         loss_mask = torch.cat([T(s["loss_mask"][1:], dtype=torch.float32) for s in pieces])
 
-        cu_seqlens = torch.cat(
-            [
-                torch.zeros(1),
-                torch.cumsum(sizes, 0),
-            ]
-        ).int()
+        cu_seqlens = torch.cat([
+            torch.zeros(1),
+            torch.cumsum(sizes, 0),
+        ]).int()
 
         return dict(
             tokens=tokens,

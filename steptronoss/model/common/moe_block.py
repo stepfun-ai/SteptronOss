@@ -1,16 +1,13 @@
 """Copyright 2026 StepFun Inc. All Rights Reserved."""
 
-import functools
-from typing import Callable
+from collections.abc import Callable
 
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from configurize import Config, Ref
-from loguru import logger
+from configurize import Config
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.checkpoint import detach_variable
 
 from steptronoss.core.parallel_state import PM
 from steptronoss.core.tensor_parallel import checkpoint
@@ -21,13 +18,9 @@ from steptronoss.core.tensor_parallel import checkpoint
 #     pre_function_backward as activation_backward,
 # )
 from steptronoss.core.tensor_parallel.mappings import (
-    _gather_along_first_dim,
-    copy_to_tensor_model_parallel_region,
     gather_from_sequence_parallel_region,
     reduce_from_tensor_model_parallel_region,
-    reduce_scatter_to_sequence_parallel_region,
     slice_to_sequence_parallel_region,
-    split_along_first_dim_with_padding,
 )
 from steptronoss.exp.base_exp import MegatronTPConfig
 from steptronoss.exp.ntp import MoePretrainMetricConfig
@@ -41,8 +34,6 @@ from steptronoss.model.utils import (
 )
 
 # from steptron.model.common.optimus_ops import moe_gather
-from steptronoss.timers import get_timers
-
 # from steptronoss.model.common.moe_logging_utils import calc_expert_output_avgnorm_naive
 from steptronoss.utils.metrics import GlobalMetrics
 
@@ -118,7 +109,7 @@ class MoEGate(nn.Module):
         super().__init__()
         self.sequence_parallel = sequence_parallel
         self.weight = torch.nn.Parameter(torch.empty(num_experts, dim, device=torch.cuda.current_device()))
-        setattr(self.weight, "sequence_parallel", sequence_parallel)
+        self.weight.sequence_parallel = sequence_parallel
 
     def forward(self, x):
         logits = x @ self.weight.T

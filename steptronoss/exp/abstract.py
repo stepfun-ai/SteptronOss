@@ -1,8 +1,9 @@
 # Copyright (c) StepFun Inc. All rights reserved.
 
 import os
+from collections.abc import Iterable
 from functools import cached_property
-from typing import TYPE_CHECKING, Iterable, NoReturn, TypedDict
+from typing import TYPE_CHECKING, NoReturn, TypedDict
 
 from configurize import Config, writable_property
 from torch.nn import Module
@@ -36,19 +37,16 @@ class _Trainer:
 
 
 class ModelConfig(Config):
-
     def build_model(self) -> Module:
         pass
 
 
 class OptimizerConfig(Config):
-
     def build_optimizer(self, model: Module) -> _Optimizer:
         pass
 
 
 class SchedulerConfig(Config):
-
     lr: float
     """Initial learning rate. Depending on decay style and initial warmup,
     the learing rate at each iteration would be different."""
@@ -58,7 +56,6 @@ class SchedulerConfig(Config):
 
 
 class MetricConfig(Config):
-
     def to_dict(self, rep=False) -> dict[str, str]:
         return {k: repr(v) for k, v in self.items()}
 
@@ -70,13 +67,11 @@ class MetricConfig(Config):
 
 
 class TrainerConfig(Config):
-
     def get_trainer_cls(self) -> type[_Trainer]:
         raise NotImplementedError
 
 
 class TokenizerConfig(Config):
-
     def build_tokenizer(self) -> "AutoTokenizer":
         pass
 
@@ -105,7 +100,6 @@ class ParallelConfig(Config):
 
 
 class DataConfig(Config):
-
     def build_dataloader(self, dp_rank: int = 0, dp_size: int = 1) -> Iterable[_DataSample]:
         """Build a Nextable that returns a dict when call next(dataloader)."""
         pass
@@ -120,7 +114,6 @@ class TaskSpec(TypedDict, total=False):
 
 
 class ResourceConfig(Config):
-
     command: str = "{TORCHRUN} {COMMAND}"
     """Actual Command. Given 'python tools/xxx_run.py my_exp.py arg1=1':
     - TORCHRUN: 'torchrun --nproc-per-node ...'
@@ -141,7 +134,6 @@ class ResourceConfig(Config):
 
 
 class BaseExp(Config):
-
     seed: int = 1234
 
     log_dir: str = "./"

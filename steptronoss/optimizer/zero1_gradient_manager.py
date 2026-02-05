@@ -1,8 +1,6 @@
 # Copyright (c) 2026, STEPFUN CORPORATION. All rights reserved.
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 import torch
 
 from steptronoss.core import tensor_parallel
@@ -60,7 +58,7 @@ class Zero1GradientManager(GradientManager):
             current_param.data.copy_(saved_param.data)
 
     @torch.no_grad()
-    def step(self) -> Tuple[bool, Optional[float], Optional[int]]:
+    def step(self) -> tuple[bool, float | None, int | None]:
         self._reduce_model_grads()
         # Copy gradients from model params to main params.
         with get_timers().record("optimizer-copy-to-main-grad", log_level=2):
@@ -99,7 +97,7 @@ class Zero1GradientManager(GradientManager):
             param_group: dict[str, list[SteptronParameter]]
             # For all the parameters in this group:
             updated_param_list = []
-            for i, param in enumerate(param_group["params"]):
+            for _i, param in enumerate(param_group["params"]):
                 buffer_info = param_info[param]
                 if buffer_info["in_this_dp"]:
                     if param.is_cuda and param.dtype == torch.bfloat16:

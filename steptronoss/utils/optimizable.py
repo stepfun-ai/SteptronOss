@@ -1,4 +1,5 @@
-from typing import Callable, Optional, TypedDict
+from collections.abc import Callable
+from typing import TypedDict
 
 import torch
 from loguru import logger
@@ -6,13 +7,13 @@ from loguru import logger
 
 class OptimizeMeta(TypedDict):
     alternatives: dict[str, Callable]
-    use_optimize: Optional[str]
+    use_optimize: str | None
 
 
 OPTIMIZABLE_REGISTER: dict[str, OptimizeMeta] = {}
 
 
-def optimizable(alternatives: dict[str, Callable] = None):
+def optimizable(alternatives: dict[str, Callable] | None = None):
     """Mark a callable as 'optimizable', optimized alternatives can be set.
 
     Usage:
@@ -67,7 +68,7 @@ def set_optimization(default=None, **kwargs):
         op_abbr_map[k] = k
     op_abbr_map = {k: v for k, v in op_abbr_map.items() if v is not None}
 
-    for k, v in OPTIMIZABLE_REGISTER.items():
+    for _k, v in OPTIMIZABLE_REGISTER.items():
         if default in v["alternatives"]:
             v["use_optimize"] = default
 

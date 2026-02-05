@@ -277,7 +277,7 @@ class Chain:
             print(f"Adding Block: {exists_blocks + b}")
             block_data = []
 
-            for i in range(block_size):
+            for _i in range(block_size):
                 sample = yield
                 if sample is None:
                     break

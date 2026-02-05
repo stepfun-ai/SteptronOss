@@ -10,7 +10,7 @@ import torch
 
 def ensure_divisibility(numerator, denominator):
     """Ensure that numerator is divisible by the denominator."""
-    assert numerator % denominator == 0, "{} is not divisible by {}".format(numerator, denominator)
+    assert numerator % denominator == 0, f"{numerator} is not divisible by {denominator}"
 
 
 def divide(numerator, denominator):
@@ -111,8 +111,8 @@ def assert_viewless_tensor(tensor, extra_msg=None):
     assert tensor._base is None, (
         "Ensure tensor._base is None before setting tensor.data or storing "
         "tensor to memory buffer. Otherwise, a memory leak will occur (and "
-        "likely accumulate over iterations). %s"
-    ) % extra_msg
+        f"likely accumulate over iterations). {extra_msg}"
+    )
     return tensor
 
 
@@ -124,8 +124,9 @@ def safely_set_viewless_tensor_data(tensor, new_data_tensor):
     """
     assert_viewless_tensor(
         tensor,
-        extra_msg="FYI, tensor._base has shape %s, and new_data_tensor has shape %s."
-        % ("--" if tensor._base is None else tensor._base.shape, new_data_tensor.shape),
+        extra_msg="FYI, tensor._base has shape {}, and new_data_tensor has shape {}.".format(
+            "--" if tensor._base is None else tensor._base.shape, new_data_tensor.shape
+        ),
     )
     tensor.data = new_data_tensor
 

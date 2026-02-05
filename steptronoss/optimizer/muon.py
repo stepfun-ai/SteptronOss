@@ -79,8 +79,7 @@ class Muon(torch.optim.Optimizer):
     def step(self):
         has_muon_param = False
 
-        for group_id, group in enumerate(self.param_groups):
-
+        for _group_id, group in enumerate(self.param_groups):
             if not group.get("is_muon_param", False):
                 continue
 
@@ -94,7 +93,6 @@ class Muon(torch.optim.Optimizer):
             matched_adamw_rms = group["matched_adamw_rms"]
 
             for p in group["params"]:
-
                 # ns_input = []
                 # tp_split_dim = self.dist_metas[p].tp_split_dim
                 # shard_cfg = p.sharded_tensor_config
@@ -111,7 +109,7 @@ class Muon(torch.optim.Optimizer):
 
                 # prepare muon buffer in state
                 state: dict[str, torch.Tensor] = self.state[p]
-                if not "muon_buffer" in state:
+                if "muon_buffer" not in state:
                     state["muon_buffer"] = torch.zeros_like(g)
                 buf = state["muon_buffer"]
                 buf.mul_(momentum).add_(g)
@@ -144,7 +142,6 @@ class Muon(torch.optim.Optimizer):
 
         # use adam for other params
         for group in self.param_groups:
-
             if group.get("is_muon_param", False):
                 continue
 
@@ -163,7 +160,6 @@ class Muon(torch.optim.Optimizer):
             use_nesterov = group.get("adamw_use_nesterov", False)
 
             for p in params:
-
                 g = p.grad
                 assert g is not None
                 state = self.state[p]

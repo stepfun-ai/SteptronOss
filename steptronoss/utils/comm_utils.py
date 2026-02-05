@@ -6,15 +6,14 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Iterable
 from functools import cached_property
 from queue import Empty
-from typing import Iterable
 
 import redis
 from loguru import logger
-from redis import Redis, RedisCluster
+from redis import Redis
 from redis.backoff import ExponentialBackoff
-from redis.cluster import ClusterNode
 from redis.exceptions import BusyLoadingError, ConnectionError, TimeoutError
 from redis.retry import Retry
 from torch.distributed import barrier, get_rank, get_world_size
@@ -284,7 +283,7 @@ class RedisQueue:
 
         self.world_size = get_world_size()
 
-    def _build_qname(self, subqueue: str = None):
+    def _build_qname(self, subqueue: str | None = None):
         if subqueue is None:
             return self.qname
         return self.qname + ":" + subqueue
@@ -302,7 +301,7 @@ class RedisQueue:
     def register_subqueue(self, subqueue: str):
         self.redis.zadd(self.subqueue_list_key, {subqueue: 0})
 
-    def put(self, data, subqueue: str = None, auto_balance: bool = False) -> bool:
+    def put(self, data, subqueue: str | None = None, auto_balance: bool = False) -> bool:
         if auto_balance and subqueue is None:
             # NOTE(sxn): Get the subqueue with least push count. Subqueue would be None
             # if there is no subqueue list, leading to default queue.
@@ -333,7 +332,7 @@ class RedisQueue:
         qlen = int(pipeline.execute()[-1])
         return qlen > 0
 
-    def get(self, subqueue_list: list[str] = None) -> tuple[int, object]:
+    def get(self, subqueue_list: list[str] | None = None) -> tuple[int, object]:
         """
         By default, get from the default queue name (qname);
         If subqueue_list is provided, get from the subqueue list in order, return on first found.
@@ -409,7 +408,7 @@ class ReusableDistributor:
     def register_subqueue(self, subqueue: str):
         self.queue.register_subqueue(subqueue)
 
-    def push_back(self, data, subqueue: str = None, auto_balance: bool = False):
+    def push_back(self, data, subqueue: str | None = None, auto_balance: bool = False):
         return self.queue.put(data, subqueue, auto_balance)
 
     @property
@@ -443,10 +442,10 @@ class LocalFuture:
         assert not self.completed, "Cannot set result of a completed Future!"
         self.value = value
 
-    def result(self, timeout: float = None):
+    def result(self, timeout: float | None = None):
         return self.get_result(timeout=timeout)
 
-    def get_result(self, timeout: float = None):
+    def get_result(self, timeout: float | None = None):
         start_time = time.monotonic()
         poll_interval = 0.1
         while not self.completed:
@@ -469,7 +468,7 @@ class RemoteFuture(LocalFuture):
 
     def __init__(
         self,
-        task_id: str = None,
+        task_id: str | None = None,
     ):
         """初始化RemoteFuture
 
@@ -488,7 +487,7 @@ class RemoteFuture(LocalFuture):
 
     def _set_default(self):
         redis_client = get_exp_redis()
-        success = redis_client.set(self.task_id, self.PENDING_STRING, nx=True)
+        redis_client.set(self.task_id, self.PENDING_STRING, nx=True)
 
     def handle_value(self, result_data: bytes):
         if result_data is None:
@@ -522,7 +521,7 @@ class RemoteFuture(LocalFuture):
         else:
             return self.PENDING_STRING
 
-    def get_result(self, timeout: float = None):
+    def get_result(self, timeout: float | None = None):
         """阻塞等待并获取结果，get_result应在全局最多调用一次。"""
         if self.completed:
             if isinstance(self.value, Exception):  # Re-raise if stored value is exception
@@ -547,7 +546,7 @@ class RemoteFuture(LocalFuture):
 
             time.sleep(poll_interval)
 
-    async def aget_result(self, timeout: float = None):
+    async def aget_result(self, timeout: float | None = None):
         import asyncio
 
         if self.completed:

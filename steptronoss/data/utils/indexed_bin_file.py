@@ -105,7 +105,7 @@ def _indexed_bin_writer(path, prefix="", cfg=None):
     if cfg:
         with open_output("cfg.json", "w") as cfg_file:
             json.dump(cfg, cfg_file)
-    with open_output(".success") as success_file:
+    with open_output(".success"):
         pass
 
 
@@ -165,7 +165,7 @@ def pread(file, offset, size):
     while bytes_read < size:
         chunk = os.pread(file.fileno(), size - bytes_read, offset + bytes_read)
         if not chunk:
-            raise IOError(f"{file.name}: Unexpected end of file")
+            raise OSError(f"{file.name}: Unexpected end of file")
         data[bytes_read : bytes_read + len(chunk)] = chunk
         bytes_read += len(chunk)
     return data
@@ -221,7 +221,7 @@ class S3Reader:
         if self.client is None:
             self.client = boto3.client("s3", endpoint_url=get_endpoint_url())
 
-        response = self.client.get_object(Bucket=self.bucket, Key=self.key, Range=f"bytes={offset}-{offset+size-1}")
+        response = self.client.get_object(Bucket=self.bucket, Key=self.key, Range=f"bytes={offset}-{offset + size - 1}")
         assert int(response["ContentLength"]) == size
         return response["Body"].read()
 
@@ -378,7 +378,7 @@ if __name__ == "__main__":
         print(reader[i])
 
     with IndexedBinWriter("./test_bin_file/") as writer:
-        for i in range(10):
+        for _i in range(10):
             writer.write(np.array([1, 2, 3], dtype=np.uint16))
 
     reader = IndexedBinReader("./test_bin_file/", dtype=np.uint16)

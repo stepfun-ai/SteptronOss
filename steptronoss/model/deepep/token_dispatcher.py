@@ -4,26 +4,21 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import torch
-import torch.distributed as dist
 import torch.distributed.nn.functional as distnn
 
 from steptronoss.core.parallel_state import PM
-from steptronoss.model.utils.moe_utils import histogram
-from steptronoss.timers import get_timers
-from steptronoss.utils.dist_utils import all_gather_object, all_to_all_tensors
+from steptronoss.utils.dist_utils import all_gather_object
 
 from .fused_a2a import (
     fused_combine,
     fused_dispatch,
-    set_deepep_num_sms,
 )
-from .fused_indices_converter import fused_indices_to_multihot
 
 if TYPE_CHECKING:
-    from steptronoss.model.common.moe_block import MoEConfig
+    pass
 
 try:
     import transformer_engine as te  # type: ignore
@@ -66,8 +61,8 @@ except ImportError:
 def permute(
     tokens,
     routing_map,
-    probs: Optional[torch.Tensor] = None,
-    num_out_tokens: Optional[int] = None,
+    probs: torch.Tensor | None = None,
+    num_out_tokens: int | None = None,
     fused: bool = False,
     drop_and_pad: bool = False,
 ):
@@ -105,7 +100,7 @@ def permute(
     num_tokens, hidden = tokens.shape
     num_experts = routing_map.shape[1]
     permuted_probs = None
-    if drop_and_pad and not (num_out_tokens is None):
+    if drop_and_pad and num_out_tokens is not None:
         capacity = num_out_tokens // num_experts
         assert not routing_map.requires_grad
         # mask [num_tokens, num_experts] -> [num_experts, num_tokens]
@@ -310,8 +305,8 @@ class _DeepepManager(_DispatchManager):
         self.permute_fusion = False
 
         # Metadata
-        self.token_indices: Optional[torch.Tensor] = None
-        self.token_probs: Optional[torch.Tensor] = None
+        self.token_indices: torch.Tensor | None = None
+        self.token_probs: torch.Tensor | None = None
         # Handle used for combine operation
         self.handle = None
 

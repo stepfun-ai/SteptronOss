@@ -1,6 +1,5 @@
 # Copyright (c) 2026, STEPFUN CORPORATION. All rights reserved.
 
-from typing import Optional, Tuple
 
 import torch
 
@@ -54,7 +53,7 @@ class AccInFP32GradientManager(GradientManager):
             current_param.data.copy_(saved_param.data)
 
     @torch.no_grad()
-    def step(self) -> Tuple[bool, Optional[float], Optional[int]]:
+    def step(self) -> tuple[bool, float | None, int | None]:
         self._reduce_model_grads()
         # Copy gradients from model params to main params.
         with get_timers().record("optimizer-copy-to-main-grad", log_level=2):

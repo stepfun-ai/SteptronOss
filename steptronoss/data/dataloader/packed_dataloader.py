@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Literal, Optional
+from collections.abc import Callable
+from typing import Any, Literal
 
 from loguru import logger
 from tqdm import tqdm
@@ -22,7 +23,7 @@ class MixedPackedDataloader(LazyUpdateNextable):
         epochs: list[float],
         max_length: int,
         oversize_policy: Literal["drop", "extend"] = "extend",
-        transform: Optional[Callable] = None,
+        transform: Callable | None = None,
     ):
         if len(datasets) == 0:
             raise ValueError("datasets cannot be empty.")
@@ -89,7 +90,7 @@ class MixedPackedDataloader(LazyUpdateNextable):
 
         scheduled_piece_order: list[tuple[int, int]] = []
         scheduled_piece_sizes: list[int] = []
-        for i in tqdm(range(int(sum(_weights))), desc="Sampling"):
+        for _i in tqdm(range(int(sum(_weights))), desc="Sampling"):
             domain_idx = next(inter_domain_sampler)
             in_domain_idx = next(in_domain_samplers[domain_idx])
             scheduled_piece_order.append((domain_idx, in_domain_idx))

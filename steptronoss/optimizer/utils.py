@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 
 from loguru import logger
 from torch import Tensor
@@ -58,15 +58,13 @@ def advanced_get_param_groups(
     for group_key, params in groups.items():
         param_groups.append(
             {"params": params, "wd_mult": group_key[1], "lr_mult": group_key[2]}
-            | {k: v for k, v in zip(special_tag_list, group_key[3])}
+            | dict(zip(special_tag_list, group_key[3]))
         )
 
     del groups
     for idx, group in enumerate(param_groups):
         extra = "; ".join([f"{k}: {v}" for k, v in group.items() if k != "params"])
         logger.info(
-            f"Optim group {idx} -> # params: "
-            f"{convert_num(sum([p.nelement() for p in group['params']]))}; "
-            f"{extra}"
+            f"Optim group {idx} -> # params: {convert_num(sum([p.nelement() for p in group['params']]))}; {extra}"
         )
     return param_groups

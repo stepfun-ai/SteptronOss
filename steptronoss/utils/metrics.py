@@ -1,7 +1,9 @@
 import contextlib
+import functools
+import operator
 import os
 from collections import defaultdict, deque
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 import torch
@@ -12,7 +14,7 @@ from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import MetricConfig
 from steptronoss.utils.dist_utils import all_gather_object
 
-__all__ = ["ROps", "RDims", "GlobalMetrics", "Metric", "AvgMetric", "PercentageMetric"]
+__all__ = ["AvgMetric", "GlobalMetrics", "Metric", "PercentageMetric", "RDims", "ROps"]
 
 
 class ROps:
@@ -244,7 +246,7 @@ class Metric(BaseMetric):
             output = dict()
             global_keys = [None] * dist.get_world_size()
             dist.all_gather_object(global_keys, list(self.data.keys()))
-            global_keys = list(set(sum(global_keys, [])))
+            global_keys = list(set(functools.reduce(operator.iadd, global_keys, [])))
             global_keys.sort()
             for key in global_keys:
                 output[key] = self._reduce_list(self.data[key])
@@ -317,7 +319,7 @@ class AvgMetric(BaseMetric):
 
         group = RDims._get_group(dim)
         gathered_data = all_gather_object(data, group=group)
-        data = torch.tensor(sum(gathered_data, []), dtype=torch.float)
+        data = torch.tensor(functools.reduce(operator.iadd, gathered_data, []), dtype=torch.float)
         if op == "mean":
             data = torch.mean(data)
         elif op == "max":
@@ -373,7 +375,7 @@ class PercentageMetric(BaseMetric):
         group = RDims._get_group(dim)
 
         # convert defaultdict to dict for gather
-        data = {k: {kk: vv for kk, vv in v.items()} if isinstance(v, defaultdict) else v for k, v in data.items()}
+        data = {k: dict(v.items()) if isinstance(v, defaultdict) else v for k, v in data.items()}
         gathered_data = all_gather_object(data, group=group)
         sumed = defaultdict(lambda: defaultdict(float))
         for d in gathered_data:
@@ -501,7 +503,7 @@ class GradNormMetric(BaseMetric):
 
     def reduce(self, reset=True) -> dict[str, torch.FloatTensor]:
         output = dict()
-        global_keys = list(set(sum(all_gather_object(list(self.data)), [])))
+        global_keys = list(set(functools.reduce(operator.iadd, all_gather_object(list(self.data)), [])))
         if global_keys:
             global_keys.sort()
             data = [self.data[x] for x in global_keys]
@@ -656,9 +658,9 @@ class WithDataDumpOutlierMetric(BaseMetric):
         """
         return value is how many items are larger than the mean of history_values
         """
-        assert len(self.data_list) == len(
-            self.real_value_list
-        ), f"data_list and real_value_list must have the same length, but got {len(self.data_list)} and {len(self.real_value_list)}"
+        assert len(self.data_list) == len(self.real_value_list), (
+            f"data_list and real_value_list must have the same length, but got {len(self.data_list)} and {len(self.real_value_list)}"
+        )
         res = 0.0
         if len(self.data_list) == 0:
             return res

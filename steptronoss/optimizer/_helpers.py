@@ -1,12 +1,7 @@
 from functools import partial
-from typing import TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
-
-if TYPE_CHECKING:
-    from steptron.optimizer.distrib_optimizer import Range
-
 
 # https://arxiv.org/pdf/2505.16932
 polar_express_coeffs_list = [
@@ -20,9 +15,9 @@ polar_express_coeffs_list = [
     (1.875, -1.25, 0.375),  # subsequent coeffs equal this numerically
 ]
 # safety factor for numerical stability (but exclude last polynomial )
-polar_express_coeffs_list = [
-    (a / 1.01, b / 1.01**3, c / 1.01**5) for (a, b, c) in polar_express_coeffs_list[:-1]
-] + [polar_express_coeffs_list[-1]]
+polar_express_coeffs_list = [(a / 1.01, b / 1.01**3, c / 1.01**5) for (a, b, c) in polar_express_coeffs_list[:-1]] + [
+    polar_express_coeffs_list[-1]
+]
 
 
 # https://arxiv.org/pdf/2505.16932, slower convergence (l=0.5)

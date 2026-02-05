@@ -5,8 +5,8 @@ used in SFT and RL training configurations.
 """
 
 import random
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator
 
 
 @dataclass
@@ -100,7 +100,7 @@ class DataList:
         Returns:
             A formatted string describing the DataList contents
         """
-        return f"DataList: {len(self.data_paths)} files, " f"{len(self.unique_mounts())} unique mounts"
+        return f"DataList: {len(self.data_paths)} files, {len(self.unique_mounts())} unique mounts"
 
 
 # --- Domain data modeling---
@@ -175,7 +175,7 @@ class DomainData:
                 # Case 2: Item is a tuple (path, rate)
                 # Perform validation on the tuple structure
                 if not (len(item) == 2 and isinstance(item[0], str) and isinstance(item[1], (float, int))):
-                    raise TypeError(f"Malformed tuple in data_paths list: {item}. " "Expected (str, float).")
+                    raise TypeError(f"Malformed tuple in data_paths list: {item}. Expected (str, float).")
 
                 path, rate = item
                 data_source_files.append(DataSourceFile(path=path, subsample_rate=float(rate)))
@@ -183,7 +183,7 @@ class DomainData:
             else:
                 # Handle unexpected types
                 raise TypeError(
-                    f"Unsupported item type in data_paths: {type(item)}. " "Expected str or tuple[str, float]."
+                    f"Unsupported item type in data_paths: {type(item)}. Expected str or tuple[str, float]."
                 )
 
         # The new cls(files=...) instance will automatically trigger

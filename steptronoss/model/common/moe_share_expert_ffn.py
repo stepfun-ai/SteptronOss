@@ -2,7 +2,6 @@ import torch
 from configurize import Ref
 
 # from steptronoss.core.tensor_parallel.layers import new_memory_multiple_paras
-from steptronoss.core.parallel_state import PM
 from steptronoss.model.common.feed_forward import FeedForward, FeedForwardConfig
 from steptronoss.model.common.moe_block import MoEBlock, MoEConfig
 from steptronoss.utils.metrics import GlobalMetrics
@@ -51,7 +50,6 @@ class MoeShareExpertFFN(torch.nn.Module):
         )
         if self.enable_share_expert:
             with ffn_cfg.modify(ffn_hidden_size=moe_cfg.share_expert_dim):
-
                 # swiglu_limit_shared = None
                 # if ffn_cfg.use_swiglu_limit_shared:
                 #     if isinstance(ffn_cfg.use_swiglu_limit_shared, float):

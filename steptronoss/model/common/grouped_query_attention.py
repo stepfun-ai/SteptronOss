@@ -1,5 +1,3 @@
-from typing import Optional, Union
-
 import torch
 from configurize import Config, Ref
 from einops import rearrange
@@ -27,13 +25,13 @@ class AttentionConfig(Config):
     num_attention_heads: int
     num_attention_groups: int
 
-    head_dim: Optional[int]
+    head_dim: int | None
     hidden_size: int
 
     use_headwise_attn_gate: bool
     use_qkv_bias: bool
 
-    sliding_window_size: Optional[int]
+    sliding_window_size: int | None
 
     use_qk_norm: bool
     layernorm_epsilon: float
@@ -41,8 +39,8 @@ class AttentionConfig(Config):
 
     recompute_qknorm_rope: bool
 
-    qk_rope_head_dim: Union[int, list[int], None]
-    rope_theta: Union[float, list[float]]
+    qk_rope_head_dim: int | list[int] | None
+    rope_theta: float | list[float]
     yarn_beta_slow: float
     yarn_beta_fast: float
     ntk_interp_ratio: float
@@ -91,9 +89,9 @@ class GroupedQueryAttention(torch.nn.Module):
             self.head_dim = cfg.head_dim
         else:
             # 确保 hidden_size 能被 num_heads 整除
-            assert (
-                cfg.hidden_size % self.num_heads == 0
-            ), f"hidden_size ({cfg.hidden_size}) must be divisible by num_heads ({self.num_heads})"
+            assert cfg.hidden_size % self.num_heads == 0, (
+                f"hidden_size ({cfg.hidden_size}) must be divisible by num_heads ({self.num_heads})"
+            )
             self.head_dim = cfg.hidden_size // self.num_heads
 
         # gated-attn
@@ -178,7 +176,7 @@ class GroupedQueryAttention(torch.nn.Module):
 
     def forward_rope(self, xq, xk, pos_id_q, pos_id_k):
         # xq, xk: B, S, H, C
-        if self.qk_rope_head_dim != None and self.qk_rope_head_dim != self.head_dim:
+        if self.qk_rope_head_dim is not None and self.qk_rope_head_dim != self.head_dim:
             rot_dim = self.qk_rope_head_dim
             xq_rope, xq_nope = torch.split(xq, [rot_dim, xq.shape[-1] - rot_dim], dim=-1)
             xk_rope, xk_nope = torch.split(xk, [rot_dim, xk.shape[-1] - rot_dim], dim=-1)
@@ -196,8 +194,8 @@ class GroupedQueryAttention(torch.nn.Module):
         xq: torch.FloatTensor,
         xk: torch.FloatTensor,
         xv: torch.FloatTensor,
-        cu_seqlens: Optional[torch.IntTensor | dict[str, torch.IntTensor]] = None,
-        max_seqlen: Optional[int | dict[str, int]] = None,
+        cu_seqlens: torch.IntTensor | dict[str, torch.IntTensor] | None = None,
+        max_seqlen: int | dict[str, int] | None = None,
     ):
 
         if not self.sequence_parallel:
@@ -222,9 +220,9 @@ class GroupedQueryAttention(torch.nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seq_len: Optional[torch.Tensor] = None,
-        position_id: Optional[torch.Tensor] = None,
+        cu_seqlens: torch.Tensor | None = None,
+        max_seq_len: torch.Tensor | None = None,
+        position_id: torch.Tensor | None = None,
         **kwargs,
     ):
         # here, we need pass pos_ids, because calc it from cu_seqlens can be slow.
@@ -276,7 +274,6 @@ class GroupedQueryAttention(torch.nn.Module):
             xk = self.k_norm(xk.contiguous())
 
         if self.cp:
-
             # Compute balanced CP splits for this rank (left and right halves)
             info0, info1 = cu_seqlens_to_balanced_cp(cu_seqlens, cp_rank=PM.rank_in("CP"), cp_size=PM.size_of("CP"))
             # Left half

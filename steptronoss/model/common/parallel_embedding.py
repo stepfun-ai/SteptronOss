@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 from configurize import Config, Ref
 
@@ -32,7 +30,7 @@ class OutputEmbeddingConfig(Config):
 
     gather_output: bool
 
-    def build_model(self, tied_embedding_weight: Optional[torch.Tensor] = None):
+    def build_model(self, tied_embedding_weight: torch.Tensor | None = None):
         return OutputEmbedding(cfg=self, tied_word_embedding_weight=tied_embedding_weight)
 
 
@@ -83,7 +81,7 @@ class OutputEmbedding(torch.nn.Module):
     def __init__(
         self,
         cfg: OutputEmbeddingConfig,
-        tied_word_embedding_weight: Optional[torch.Tensor],
+        tied_word_embedding_weight: torch.Tensor | None,
     ):
         super().__init__()
         self.norm = RMSNorm(

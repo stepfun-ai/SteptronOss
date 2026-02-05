@@ -5,7 +5,6 @@ from steptronoss.tokenizer.hf_compat_tokenizer import HFCompatTokenizer
 
 
 class Qwen3MultiTurnMaskSFTTemplate:
-
     def __init__(self, tokenizer: HFCompatTokenizer):
         self.tokenizer: HFCompatTokenizer = tokenizer
 
@@ -45,7 +44,6 @@ class Qwen3MultiTurnMaskSFTTemplate:
             # 只训练最后一个user之后的assistant轮
             current_pos = last_user_end_pos
             for i in range(last_user_idx + 1, len(data)):
-
                 tokens_up_to_current = self.apply_chat_template(data[: i + 1], tokenize=True, tools=tool_schemas)
 
                 if data[i]["role"] == "assistant" and data[i]["loss_mask"] == 1.0:

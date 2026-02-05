@@ -64,7 +64,6 @@ class Step3p5Block(TransformerBlock):
 
 
 class Step3p5Model(LlamaLikeModel):
-
     def build(self, layer_map: dict[int, dict[int, dict[int, dict]]]):
         # Build model components
         self.layers = nn.ModuleList()

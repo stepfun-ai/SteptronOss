@@ -139,7 +139,7 @@ def apply_match(match: re.Match, string: str):
         string = string[2:]
     stars = match.groups()
     for gi, g in enumerate(stars):
-        string = string.replace(f"${gi+1}", g)
+        string = string.replace(f"${gi + 1}", g)
     return string
 
 
@@ -156,7 +156,7 @@ def parse_indicator_from_str(indicator: list[str] | str):
             else:
                 op = cmd[0]
                 if op.startswith("CAT"):
-                    dim = re.match("CAT\((\d)\)", op)
+                    dim = re.match(r"CAT\((\d)\)", op)
                     assert dim, f"Illegal OP: {cmd}"
                     dim = int(dim.group(1))
                     result[name] = Cat(*cmd[1:], dim=dim)
@@ -195,7 +195,7 @@ class HFWeights(dict):
 
         index_file = join(path, "model.safetensors.index.json")
         if exists(index_file):
-            with open(index_file, "r") as f:
+            with open(index_file) as f:
                 mapper = json.load(f)["weight_map"]
             weight_files = dict()
             for k, v in mapper.items():

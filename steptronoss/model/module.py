@@ -158,7 +158,7 @@ class MegatronModule(torch.nn.Module):
         """
         pass
 
-    reshaper: "OnlineReshaper"
+    reshaper: OnlineReshaper
 
     def load_hf_state_dict(self, state_dict, *args, **kwargs):
         assert hasattr(self, "reshaper"), f"{self.__class__}.reshaper not defined! HF load/dump disabled!"
@@ -231,7 +231,6 @@ def float16_to_fp32(val):
 
 
 class Float16Module(ModelWrapperBase):
-
     def __init__(self, module: MegatronModule, dtype: torch.dtype, fp32_output=True):
         super().__init__(module)
 

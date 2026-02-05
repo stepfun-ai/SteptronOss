@@ -7,7 +7,7 @@ import os
 import pickle
 from os.path import join
 from threading import Thread
-from typing import Optional, TypedDict
+from typing import TypedDict
 
 import torch
 import torch.distributed as dist
@@ -97,7 +97,7 @@ def uploader(
         successes = [f for f in smart_listdir(success_path) if f.endswith(".success")]
         logger.info(f"Finished uploading: [{len(successes)} / {world_size}]", at=0)
         if len(successes) == world_size:
-            logger.info(f"All Rank Finished!", at="all")
+            logger.info("All Rank Finished!", at="all")
             if update_latest:
                 to_write, write_path = update_latest
                 latest_tmp = os.path.join(write_path, f"latest_ckpt.rank{rank}")
@@ -120,7 +120,7 @@ def dump_ckpt(
     optimizer=None,
     opt_param_scheduler=None,
     dataloader=None,
-    extra_info: Optional[dict] = {},
+    extra_info: dict | None = {},
 ):
     """
     Async save a model checkpoint. Return the handle of thread or None.
@@ -138,16 +138,14 @@ def dump_ckpt(
     if dist.is_initialized():
         dist.barrier()
 
-    comps = " | ".join(
-        [
-            n
-            for x, n in zip(
-                [model, optimizer, opt_param_scheduler, dataloader],
-                ["model", "optimizer", "scheduler", "data"],
-            )
-            if x is not None and cfg.save_option[n]
-        ]
-    )
+    comps = " | ".join([
+        n
+        for x, n in zip(
+            [model, optimizer, opt_param_scheduler, dataloader],
+            ["model", "optimizer", "scheduler", "data"],
+        )
+        if x is not None and cfg.save_option[n]
+    ])
     logger.info(f"Saving to {final_path}:", at=0)
     logger.info(f"Savings: {comps}", at=0)
 
@@ -179,7 +177,7 @@ def dump_ckpt(
                 else:
                     for i in range(len(model)):
                         set_vpp_rank(i)
-                        model_state_dict["model%d" % i] = model[i].state_dict()
+                        model_state_dict[f"model{i}"] = model[i].state_dict()
 
     model_state_dict["extra"] = recur_to_allowed_types(extra_info)
     model_state_dict["checkpoint_version"] = 4.0
@@ -283,7 +281,7 @@ def split_state_dict(model_state_dict):
     non_expert_state_dict = {k: v for k, v in model_state_dict.items() if not k.startswith("model")}
 
     # Check if model states exist (either "model" or "model0", "model1", etc.)
-    model_keys = [k for k in model_state_dict.keys() if k.startswith("model")]
+    model_keys = [k for k in model_state_dict if k.startswith("model")]
     if not model_keys:
         return expert_state_dict, non_expert_state_dict
 
@@ -399,7 +397,7 @@ def load_ckpt(path, cfg: CheckpointConfig) -> tuple[CheckpointDict, dict]:
             # we all use dp0
             if smart_exists(optim_path) and not no_optim:
                 this_rank_data.update(load(optim_path))
-        dp_0_data = {k: v for k, v in this_rank_data.items()}
+        dp_0_data = dict(this_rank_data.items())
     else:
         # dp x load own, meta only
         this_rank_data = {}
@@ -512,7 +510,7 @@ def load_ckpt(path, cfg: CheckpointConfig) -> tuple[CheckpointDict, dict]:
 
     # Model.
     logger.info(f"Loading modules from {path}...", at=0)
-    logger.info(f"([required] [in_ckpt])", at=0)
+    logger.info("([required] [in_ckpt])", at=0)
     model_exists = "model" in this_rank_data or "model0" in this_rank_data
     logger.info(
         f"model: [{'√' if cfg.load_option.model else '×'}] [{'√' if model_exists else '×'}]",

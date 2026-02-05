@@ -1,10 +1,12 @@
 import io
-import math
 import pickle
 from dataclasses import is_dataclass
-from typing import List, Tuple, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
+
+import functools
+import operator
 
 import numpy as np
 import torch
@@ -13,7 +15,7 @@ from configurize import DataClass
 
 from steptronoss.core.parallel_state import PM
 
-from .general import list_split, list_split_T, recur_to
+from .general import list_split_T, recur_to
 
 UNSUPPORTED_DTYPE = -2
 dtype_to_id = {
@@ -118,19 +120,17 @@ def _convert_tensor(tensors, rank, src_rank, inp_tensor_obj: T, group, move_to_c
         else:
             return new_obj
     elif isinstance(tensors, (list, tuple)):
-        new_obj = type(tensors)(
-            [
-                _convert_tensor(
-                    value,
-                    rank,
-                    src_rank,
-                    inp_tensor_obj[idx] if rank == src_rank else None,
-                    group,
-                    move_to_cuda,
-                )
-                for idx, value in enumerate(tensors)
-            ]
-        )
+        new_obj = type(tensors)([
+            _convert_tensor(
+                value,
+                rank,
+                src_rank,
+                inp_tensor_obj[idx] if rank == src_rank else None,
+                group,
+                move_to_cuda,
+            )
+            for idx, value in enumerate(tensors)
+        ])
         if rank == src_rank and not move_to_cuda:
             return inp_tensor_obj
         else:
@@ -391,8 +391,7 @@ def tensor_to_dict(flat_byte_tensor_on_comm_device: torch.Tensor, keep_on_comm_d
         # 从comm_device上的扁平张量中获取当前Tensor的字节数据视图 (仍然在comm_device上)
         # 这是一个视图操作，非常轻量
         current_tensor_bytes_on_comm_device_view = flat_byte_tensor_on_comm_device[
-            data_block_start_idx
-            + current_data_offset_in_data_block : data_block_start_idx
+            data_block_start_idx + current_data_offset_in_data_block : data_block_start_idx
             + current_data_offset_in_data_block
             + num_bytes_for_current_tensor
         ]
@@ -617,7 +616,7 @@ def concat_list_in_group(local_list: list, group=None):
         src = have_data.index(True)
         return broadcast_tensors(local_list, src_rank=src, group=group)
     else:
-        return sum(all_gather_object(local_list, group=group), list())
+        return functools.reduce(operator.iadd, all_gather_object(local_list, group=group), [])
 
 
 def gather_object(objects, group=None, dst=0):
@@ -643,7 +642,7 @@ def list_balance(data: list, group=None) -> tuple[list, tuple]:
 
     send = [[data[k] for k, j in enumerate(actual_ids[rank]) if j in balanced_ids[i]] for i in range(world_size)]
     send = recur_to(send, "cpu")
-    balanced_data = sum(all_to_all_objects(send, group=group), [])
+    balanced_data = functools.reduce(operator.iadd, all_to_all_objects(send, group=group), [])
     return balanced_data, (actual_ids, balanced_ids, group)
 
 
@@ -661,7 +660,7 @@ def list_unbalance(balanced_data: list, restore_info: tuple) -> list:
         [balanced_data[k] for k, j in enumerate(balanced_ids[rank]) if j in actual_ids[i]] for i in range(world_size)
     ]
     send = recur_to(send, "cpu")
-    restored_data = sum(all_to_all_objects(send, group=group), [])
+    restored_data = functools.reduce(operator.iadd, all_to_all_objects(send, group=group), [])
     return restored_data
 
 
@@ -703,7 +702,7 @@ def recv_obj(src, group):
     return recur_to(object, "cuda")
 
 
-def pack_tensors(tensors_dict: dict, names: List[str]) -> Tuple[torch.Tensor, torch.Tensor]:
+def pack_tensors(tensors_dict: dict, names: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
     """将不同数据类型的tensors打包为bytes tensor
 
     Args:
@@ -728,7 +727,7 @@ def pack_tensors(tensors_dict: dict, names: List[str]) -> Tuple[torch.Tensor, to
             tensors_dict[key] = torch.tensor([value], dtype=torch.int64, device="cuda")
 
     for name in names:
-        tensor = tensors_dict.get(name, None)
+        tensor = tensors_dict.get(name)
         if tensor is None:
             shapes_and_dtypes.append([-1, -1, -1])
             continue
@@ -756,7 +755,7 @@ def pack_tensors(tensors_dict: dict, names: List[str]) -> Tuple[torch.Tensor, to
     return shapes_and_dtypes, packed_data
 
 
-def unpack_tensors(shapes_and_dtypes: torch.Tensor, packed_data: torch.Tensor, names: List[str]) -> dict:
+def unpack_tensors(shapes_and_dtypes: torch.Tensor, packed_data: torch.Tensor, names: list[str]) -> dict:
     """从bytes解包出不同数据类型的tensors
 
     Args:
@@ -808,7 +807,7 @@ def unpack_tensors(shapes_and_dtypes: torch.Tensor, packed_data: torch.Tensor, n
     return tensors_dict
 
 
-def recv_tensors(names: List[str], src: int, group=None) -> dict:
+def recv_tensors(names: list[str], src: int, group=None) -> dict:
     """接收多个不同数据类型的tensor"""
     # 更新shapes_and_dtypes的大小以容纳prefill_num
     shapes_and_dtypes = torch.empty([len(names), 3], dtype=torch.int64, device="cuda")
@@ -832,7 +831,7 @@ def recv_tensors(names: List[str], src: int, group=None) -> dict:
     return tensors_dict
 
 
-def send_tensors(tensors_dict: dict, dst: int, group=None) -> List[torch.distributed.Work]:
+def send_tensors(tensors_dict: dict, dst: int, group=None) -> list[torch.distributed.Work]:
     """异步发送多个不同数据类型的tensor"""
     # 确保所有int类型数据都转换为tensor
     names = list(tensors_dict.keys())

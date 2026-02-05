@@ -5,7 +5,6 @@ used to implement various LLM architectures (LLaMA, Qwen, etc.)
 """
 
 from contextlib import nullcontext
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -129,9 +128,9 @@ class TransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seq_len: Optional[int] = None,
-        position_id: Optional[torch.IntTensor] = None,
+        cu_seqlens: torch.Tensor | None = None,
+        max_seq_len: int | None = None,
+        position_id: torch.IntTensor | None = None,
         **kwargs,
     ) -> torch.Tensor:
         """Forward pass through the transformer block."""
@@ -231,7 +230,7 @@ class LlamaLikeModel(MegatronModule):
             for pp in range(pp_size):
                 layer_map.setdefault(pp, dict())
                 layer_map[pp].setdefault(vp, dict())
-                for i in range(local_layers):
+                for _i in range(local_layers):
                     layer_map[pp][vp][layer_id] = dict(recompute=self.cfg.recompute)
                     layer_id += 1
         return layer_map
@@ -285,7 +284,7 @@ class LlamaLikeModel(MegatronModule):
             p._log_name = "other"
         for block in self.layers:
             if isinstance(block, TransformerBlock):
-                for n, p in block.named_parameters():
+                for _n, p in block.named_parameters():
                     p._log_name = f"layer{block.layer_id}"
         if self.is_pipeline_first_stage():
             for p in self.tok_embeddings.parameters():

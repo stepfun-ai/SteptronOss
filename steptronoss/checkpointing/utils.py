@@ -1,12 +1,9 @@
-import random
 import re
 from copy import deepcopy
 
 import numpy as np
 import torch
 from megfile import smart_listdir
-
-from steptronoss.core.parallel_state import PM
 
 
 def recur_stat(state_dict):
@@ -41,7 +38,7 @@ def move_to_memory(state_dict):
                 new_state_dict.append(move_to_memory(state_dict[i]))
     elif type(state_dict) is dict:
         new_state_dict = state_dict.__class__()
-        for k in state_dict.keys():
+        for k in state_dict:
             if isinstance(state_dict[k], torch.Tensor):
                 new_state_dict[k] = move_tensor_to_memory(state_dict[k])
             else:

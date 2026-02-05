@@ -1,5 +1,5 @@
 import abc
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 import torch
 
@@ -41,7 +41,7 @@ class BaseGenerator(abc.ABC):
     def list_generate(
         self,
         prompts: list[GenerationInput],
-        max_rollout: int = None,
+        max_rollout: int | None = None,
         offload: bool = True,
     ) -> list[GenerationOutput]:
         """Take inputs from a list and generate outputs as a list."""

@@ -2,17 +2,14 @@ from __future__ import annotations
 
 import copy
 import os
+from collections.abc import Callable, Iterable, Iterator
 from functools import cached_property
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     ForwardRef,
-    Iterable,
-    Iterator,
     Literal,
     NoReturn,
-    Optional,
 )
 
 import torch
@@ -99,11 +96,11 @@ class MetricConfig(AbstractMetricConfig):
 
 
 class TrainerConfig(AbstractTrainerConfig):
-    train_iters: Optional[int] = None
+    train_iters: int | None = None
 
     offload_optimizer_state: bool = False
 
-    global_data_keys: Optional[list[str]] = Ref("..data_cfg.global_data_keys", None)
+    global_data_keys: list[str] | None = Ref("..data_cfg.global_data_keys", None)
     """When set, broadcast data[key] to all ranks (not only on data-source ranks)."""
 
     empty_unused_memory_level: int = 0
@@ -318,7 +315,7 @@ class TokenizerConfig(AbstractTokenizerConfig):
 
     make_vocab_size_divisible_by: int = 128
 
-    tokenizer_path: Optional[str] = None
+    tokenizer_path: str | None = None
 
     tensor_model_parallel_size: int = Ref("..model_cfg.tensor_model_parallel_size", 1)
 
@@ -474,7 +471,6 @@ class DataConfig(Config):
 
 
 class BaseExp(Config):
-
     seed = 1234
 
     log_dir = "./"

@@ -4,7 +4,6 @@
 
 import json
 import os
-from typing import Optional
 
 import msgpack
 import torch
@@ -109,7 +108,7 @@ def force_clear_mem():
 
 def print_n_params(model: list[torch.nn.Module]):
     # Print number of parameters.
-    pp_size = PM.size_of("PP")
+    _pp_size = PM.size_of("PP")
     tp_size = PM.size_of("TP")
     etp_size = PM.size_of("ETP")
     ep_size = PM.size_of("EP")
@@ -146,7 +145,7 @@ def print_n_params(model: list[torch.nn.Module]):
     local_tensor_parallel_equiv = 0
 
     for module in model:
-        for key, p in module.named_parameters():
+        for _key, p in module.named_parameters():
             n_raw = p.numel()
             n_global = global_equiv_numel(p)
             local_raw_numel += n_raw
@@ -341,7 +340,7 @@ def profile_allreduce():
         group = parallel.group
         stats = []
         logger.debug(f"start all reduce of group {g_name}")
-        for i in range(10):
+        for _i in range(10):
             dist.barrier()
             t = time.time()
             dist.all_reduce(x, group=group)
@@ -356,16 +355,14 @@ def profile_allreduce():
             MBpS_min = MBpS.clone()
             dist.all_reduce(MBpS_min, op=dist.ReduceOp.MIN)
 
-            stats.append(
-                (
-                    MBpS_mean.item(),
-                    MBpS_min.item(),
-                )
-            )
+            stats.append((
+                MBpS_mean.item(),
+                MBpS_min.item(),
+            ))
         stats_mean = ", ".join([f"{i[0]:.2f}" for i in stats])
         stats_min = ", ".join([f"{i[1]:.2f}" for i in stats])
         logger.info(
-            f"Group allreduce [{g_name}] (10 tries):" f"\n>> Avg [{stats_mean}] GB/s\n>> Min [{stats_min}] GB/s",
+            f"Group allreduce [{g_name}] (10 tries):\n>> Avg [{stats_mean}] GB/s\n>> Min [{stats_min}] GB/s",
             at=0,
         )
 
@@ -386,13 +383,11 @@ def check_nan(tensors, input_tensor):
 
         if input_is_nan == 0:
             logger.warning(
-                f"NaN detected [{N_nan}/{N_total}] on TP={PM.rank_in('TP')}/"
-                f"PP={PM.rank_in('PP')}/"
-                f"VP={get_vpp_rank()}"
+                f"NaN detected [{N_nan}/{N_total}] on TP={PM.rank_in('TP')}/PP={PM.rank_in('PP')}/VP={get_vpp_rank()}"
             )
 
 
-def get_exp_id() -> Optional[str]:
+def get_exp_id() -> str | None:
     """Get EXP_ID for this worker."""
     exp_id = os.environ.get("EXP_ID", None)
     if exp_id is not None:
@@ -425,7 +420,7 @@ def safe_dump_jsonl(records: list, file_path: str):
 
 
 def load_jsonl(file_path: str):
-    with open(file_path, "r") as f:
+    with open(file_path) as f:
         for line in f:
             yield json.loads(line.strip())
 

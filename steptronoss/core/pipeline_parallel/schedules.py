@@ -1,6 +1,6 @@
 # Copyright (c) 2026, STEPFUN CORPORATION. All rights reserved.
 
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 import torch
 from torch.autograd.variable import Variable
@@ -30,7 +30,7 @@ def deallocate_output_tensor(out):
     """
     if out is None:
         return
-    assert isinstance(out, torch.Tensor), "expected Tensor, found %s." % type(out).__name__
+    assert isinstance(out, torch.Tensor), f"expected Tensor, found {type(out).__name__}."
     assert out._base is None, "counter-productive to free a view of another tensor."
     out.data = torch.empty(
         (1,),
@@ -49,8 +49,8 @@ def custom_backward(output, grad_output):
     """
 
     assert output.numel() == 1, "output should be pseudo-'freed' in schedule, to optimize memory"
-    assert isinstance(output, torch.Tensor), "output == '%s'." % type(output).__name__
-    assert isinstance(grad_output, (torch.Tensor, type(None))), "grad_output == '%s'." % type(grad_output).__name__
+    assert isinstance(output, torch.Tensor), f"output == '{type(output).__name__}'."
+    assert isinstance(grad_output, (torch.Tensor, type(None))), f"grad_output == '{type(grad_output).__name__}'."
 
     # Handle scalar output
     if grad_output is None:
@@ -140,7 +140,7 @@ class FWBWScheduler:
         data_proc_fn=Callable[[dict], dict],
         collect_output=False,
         # if training
-        loss_fn: Callable = None,
+        loss_fn: Callable | None = None,
         training=True,
     ):
         self.models = models
@@ -162,7 +162,7 @@ class FWBWScheduler:
         self._prefetched_data = [[] for _ in self.models]
         for vp_rank, data_iter in enumerate(self.data_iterators):
             set_vpp_rank(vp_rank)
-            for i in range(forward_num):
+            for _i in range(forward_num):
                 # data_iter 可能为 None（非数据源rank），sync_get_data 会自行处理
                 self._prefetched_data[vp_rank].append(self.data_sync_fn(data_iter))
                 # logger.info(f"prefetch micro_batch {i} for vpp {vp_rank}")
@@ -219,7 +219,7 @@ class FWBWScheduler:
         self._prefetch_iteration_data(forward_num)
 
         input_tensor, output_tensor_grad = None, None
-        for i in range(forward_num):
+        for _i in range(forward_num):
             output_tensor = self.forward_chunk(0, loss_scale=1 / forward_num)
             if self.training:
                 backward_step(input_tensor, output_tensor, output_tensor_grad)
@@ -241,7 +241,7 @@ class PPScheduler(FWBWScheduler):
         num_microbatches_remaining = forward_num - num_warmup_microbatches
 
         # Run warmup forward passes.
-        for i in range(num_warmup_microbatches):
+        for _i in range(num_warmup_microbatches):
             input_tensor = p2p_comm.recv_forward(self.config)
             output_tensor = self.forward_chunk(input_tensor=input_tensor, loss_scale=1 / forward_num)
 
@@ -292,7 +292,7 @@ class PPScheduler(FWBWScheduler):
 
         # Run cooldown backward passes.
         if self.training:
-            for i in range(num_warmup_microbatches):
+            for _i in range(num_warmup_microbatches):
                 input_tensor = self.input_tensors.pop(0)
                 output_tensor = self.output_tensors.pop(0)
 
@@ -307,16 +307,15 @@ class PPScheduler(FWBWScheduler):
 
 
 class VPPScheduler(PPScheduler):
-
     def run(self, forward_num=1):
         """Run interleaved 1F1B schedule (model split into model chunks), with
         communication between pipeline stages as needed.
 
         Returns dictionary with losses if the last stage, empty dict otherwise."""
         self._collected_outputs.clear()
-        assert (
-            forward_num % PM.size_of("PP") == 0
-        ), f"forward_num ({forward_num}) is not divisible by pp_size ({PM.size_of('PP')})"
+        assert forward_num % PM.size_of("PP") == 0, (
+            f"forward_num ({forward_num}) is not divisible by pp_size ({PM.size_of('PP')})"
+        )
 
         self._prefetch_iteration_data(forward_num)
         input_tensors = [list() for i in self.models]

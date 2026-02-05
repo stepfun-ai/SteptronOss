@@ -2,7 +2,6 @@ import json
 import os
 import shutil
 from os.path import join
-from typing import Optional
 
 import torch
 from loguru import logger
@@ -43,7 +42,7 @@ def _apply_config_overrides(config_path: str, overrides: dict):
     if not overrides:
         return
 
-    with open(config_path, "r") as f:
+    with open(config_path) as f:
         config = json.load(f)
 
     config.update(overrides)
@@ -59,7 +58,7 @@ def dump_safetensors(
     model_reference_path: str,
     tokenizer_reference_path: str,
     models: list,
-    model_cfg: Optional[Megatron3DParallelModelConfig] = None,
+    model_cfg: Megatron3DParallelModelConfig | None = None,
 ):
     # copy json configs
     if PM.world_rank == 0:

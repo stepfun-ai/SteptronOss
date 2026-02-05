@@ -61,11 +61,11 @@ def test_update_from_args_calls_parse_args_and_merge(monkeypatch):
     steptron_utils_module = types.ModuleType("steptronoss.utils")
     arguments_module = types.ModuleType("steptronoss.utils.arguments")
     logger_module = types.ModuleType("steptronoss.utils.logger")
-    setattr(arguments_module, "parse_args", fake_parse_args)
-    setattr(logger_module, "setup_logger", fake_setup_logger)
-    setattr(steptron_utils_module, "arguments", arguments_module)
-    setattr(steptron_utils_module, "logger", logger_module)
-    setattr(steptron_module, "utils", steptron_utils_module)
+    arguments_module.parse_args = fake_parse_args
+    logger_module.setup_logger = fake_setup_logger
+    steptron_utils_module.arguments = arguments_module
+    steptron_utils_module.logger = logger_module
+    steptron_module.utils = steptron_utils_module
 
     monkeypatch.setitem(sys.modules, "steptronoss", steptron_module)
     monkeypatch.setitem(sys.modules, "steptronoss.utils", steptron_utils_module)

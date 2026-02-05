@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import pickle
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import megfile
 import torch.multiprocessing as mp
@@ -20,7 +21,7 @@ def _compile_shard(
     shard_id: int,
     num_shards: int,
     shard_path: str,
-    sample_meta_extractor: Optional[Callable],
+    sample_meta_extractor: Callable | None,
     progress: Any | None = None,
 ):
     megfile.smart_makedirs(shard_path, exist_ok=True)
@@ -61,7 +62,7 @@ def _compile_shard_worker(
     shard_id: int,
     num_shards: int,
     shard_path: str,
-    sample_meta_extractor: Optional[Callable],
+    sample_meta_extractor: Callable | None,
     output_queue: mp.Queue,
 ) -> None:
     result = _compile_shard(dataset, total, shard_id, num_shards, shard_path, sample_meta_extractor)
@@ -72,7 +73,7 @@ def compile_dataset(
     dataset: Dataset,
     save_path: str,
     num_workers: int | None = None,
-    sample_meta_extractor: Callable[[Any], Any] = None,
+    sample_meta_extractor: Callable[[Any], Any] | None = None,
 ) -> str:
     """Compile a dataset into one or more indexed binary shards.
     sample_meta_extractor: extract sample-wise info from each sample,
@@ -133,7 +134,7 @@ def compile_dataset(
                 active.append(proc)
 
             errors = []
-            for i in range(len(active)):
+            for _i in range(len(active)):
                 output = error_queue.get()
                 if isinstance(output, Exception):
                     errors.append(output)

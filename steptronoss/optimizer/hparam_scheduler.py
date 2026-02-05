@@ -4,7 +4,7 @@
 
 import math
 from abc import abstractmethod
-from typing import Callable
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -87,7 +87,7 @@ class FuncInvSqrt(ScaleFnWithWarmUpAndClip):
         return self.warmup**0.5 / (x**0.5)
 
 
-class CosineFuncWithReWarmup(object):
+class CosineFuncWithReWarmup:
     def __init__(
         self,
         n,
@@ -96,7 +96,7 @@ class CosineFuncWithReWarmup(object):
         re_warmup=0,
         start_token=0,
         re_warmup_min: float = 0,
-        re_warmup_max: float = None,
+        re_warmup_max: float | None = None,
         start_bias: float = 0,
     ):
         self.end = n
@@ -151,8 +151,7 @@ class CosineFuncWithReWarmup(object):
             )
 
 
-class Scheduler(object):
-
+class Scheduler:
     def __init__(
         self,
         optimizer,

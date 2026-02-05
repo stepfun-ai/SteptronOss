@@ -26,7 +26,6 @@ class VocabUtility:
 
 
 class _VocabParallelCrossEntropy(torch.autograd.Function):
-
     @staticmethod
     def forward(ctx, vocab_parallel_logits, target, label_smoothing=0.0):
 
@@ -91,7 +90,7 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
 
         vocab_size = exp_logits.size(-1)
         if label_smoothing > 0:
-            """
+            r"""
             We'd like to assign 1 / (K - 1) probability mass to every index that is not the ground truth.
             = (1 - alpha) * y_gt + alpha * mean(y_{i for i != gt})
             = (1 - alpha) * y_gt + (alpha / (K - 1)) * \sum_{i != gt} y_i

@@ -30,19 +30,14 @@ class Exp(BaseExp):
         self.trainer_cfg.get_trainer_cls()(self).train()
 
 
-import sys
-import time
-
 # sys.excepthook = lambda a, b, c: [print("Hold On Error"), time.sleep(3600)]
 
 if __name__ == "__main__":
     Exp().train()
     exit()
-    from steptronoss.core.parallel_state import PM, get_vpp_size, set_vpp_rank
+    from steptronoss.core.parallel_state import PM
     from steptronoss.initialize import set_mpu_random_seed
-    from steptronoss.utils import print_n_params, profile_allreduce
     from steptronoss.utils.logger import setup_logger
-    from steptronoss.utils.weight_loader import HFWeights
 
     logger = setup_logger("./tensorboard_dir/")
     exp = Exp()

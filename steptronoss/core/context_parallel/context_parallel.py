@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 from torch import distributed as dist
 
 from steptronoss.core.parallel_state import PM
@@ -71,7 +70,7 @@ def cu_seqlens_to_balanced_cp(cu_seqlens: torch.IntTensor, cp_rank: int, cp_size
         cu_seqlens -> piece_sizes, piece_ids
         """
         sample_boundries = set(cum_lens)
-        cp_boundries = set([(i + 1) * cum_lens[-1] // split for i in range(split)])
+        cp_boundries = {(i + 1) * cum_lens[-1] // split for i in range(split)}
         boundries = sorted(sample_boundries | cp_boundries)
 
         cp_lens, piece_id = [[]], [[]]

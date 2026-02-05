@@ -18,7 +18,6 @@ from steptronoss.utils import GlobalMetrics, Metric
 
 
 class PretrainMetricConfig(MetricConfig):
-
     def __init__(self):
         super().__init__()
 
@@ -130,7 +129,7 @@ class NTPTrainerConfig(TrainerConfig):
 
         losses: torch.Tensor = losses.transpose(1, 0).contiguous()  # make B, S
 
-        loss_masks = data.get("loss_masks", None)
+        loss_masks = data.get("loss_masks")
         if loss_masks is None and "loss_mask" in data:
             raise RuntimeError("Critical Typo: please use 'loss_masks' instead of 'loss_mask' in data!")
         if loss_masks is not None:

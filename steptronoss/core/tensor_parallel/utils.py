@@ -1,6 +1,5 @@
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 
-from typing import List, Sequence
 
 import torch
 
@@ -12,7 +11,7 @@ def split_tensor_along_last_dim(
     tensor: torch.Tensor,
     num_partitions: int,
     contiguous_split_chunks: bool = False,
-) -> List[torch.Tensor]:
+) -> list[torch.Tensor]:
     """Split a tensor along its last dimension.
 
     Arguments:

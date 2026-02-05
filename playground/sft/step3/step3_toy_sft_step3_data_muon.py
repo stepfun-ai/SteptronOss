@@ -1,6 +1,3 @@
-import sys
-import time
-
 from playground.data.sft.reasoning_GCMKSTIDF_sft_stage1_1203_compile_step3 import (
     Step3SFTDataStep3TokenizedConfig,
 )
@@ -44,47 +41,41 @@ class Step3p5MuonConfig(MuonConfig):
             bias = getattr(wqkv, "bias", None)
             if weight is not None:
                 if module.wqkv_extra_dims:
-                    merge_op = Sequential(
-                        [
-                            Rename("grad.qkv: grad"),
-                            Inverse(KeepThisTP()),
-                            Inverse(
-                                GQAMergeQKVG(
-                                    group_num=module.num_kv_heads,
-                                    head_dim=module.head_dim,
-                                    gate_dims=module.wqkv_extra_dims,
-                                )
-                            ),
-                        ]
-                    )
-                else:
-                    merge_op = Sequential(
-                        [
-                            Rename("grad.qkv: grad"),
-                            Inverse(KeepThisTP()),
-                            Inverse(
-                                GQAMergeQKV(
-                                    group_num=module.num_kv_heads,
-                                    head_dim=module.head_dim,
-                                )
-                            ),
-                        ]
-                    )
-                merge_ops[id(weight)] = merge_op
-
-            if bias is not None and not module.wqkv_extra_dims:
-                merge_ops[id(bias)] = Sequential(
-                    [
+                    merge_op = Sequential([
                         Rename("grad.qkv: grad"),
                         Inverse(KeepThisTP()),
                         Inverse(
-                            GQAMergeQKVBias(
+                            GQAMergeQKVG(
+                                group_num=module.num_kv_heads,
+                                head_dim=module.head_dim,
+                                gate_dims=module.wqkv_extra_dims,
+                            )
+                        ),
+                    ])
+                else:
+                    merge_op = Sequential([
+                        Rename("grad.qkv: grad"),
+                        Inverse(KeepThisTP()),
+                        Inverse(
+                            GQAMergeQKV(
                                 group_num=module.num_kv_heads,
                                 head_dim=module.head_dim,
                             )
                         ),
-                    ]
-                )
+                    ])
+                merge_ops[id(weight)] = merge_op
+
+            if bias is not None and not module.wqkv_extra_dims:
+                merge_ops[id(bias)] = Sequential([
+                    Rename("grad.qkv: grad"),
+                    Inverse(KeepThisTP()),
+                    Inverse(
+                        GQAMergeQKVBias(
+                            group_num=module.num_kv_heads,
+                            head_dim=module.head_dim,
+                        )
+                    ),
+                ])
 
         for module in model.modules():
             if not isinstance(module, FeedForward):
@@ -95,13 +86,11 @@ class Step3p5MuonConfig(MuonConfig):
                 group = "ETP" if getattr(w1, "use_moe", False) else "TP"
                 merge_ops.setdefault(
                     id(w1.weight),
-                    Sequential(
-                        [
-                            Rename("grad.gate_up: grad"),
-                            Inverse(KeepThisTP(group=group)),
-                            Inverse(FFNMergeGateUp(group=group)),
-                        ]
-                    ),
+                    Sequential([
+                        Rename("grad.gate_up: grad"),
+                        Inverse(KeepThisTP(group=group)),
+                        Inverse(FFNMergeGateUp(group=group)),
+                    ]),
                 )
             if w2 is not None and hasattr(w2, "weight"):
                 group = "ETP" if getattr(w2, "use_moe", False) else "TP"
@@ -133,7 +122,7 @@ class Step3p5MuonConfig(MuonConfig):
                 if weight is not None:
                     merge_ops.setdefault(id(weight), identity)
 
-        for name, param in model.named_parameters():
+        for _name, param in model.named_parameters():
             if not param.requires_grad:
                 continue
 
@@ -151,7 +140,7 @@ class Step3p5MuonConfig(MuonConfig):
                 else:
                     merge_op = identity
 
-            setattr(param, "merge_op", merge_op)
+            param.merge_op = merge_op
 
 
 # sys.excepthook = lambda a, b, c: [print("HoldOneError"), time.sleep(3600)]

@@ -3,6 +3,7 @@
 """Model and data parallel groups."""
 
 import atexit
+import operator
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -99,7 +100,7 @@ class ParallelManager:
         assert len(dst_comp) == 2, "Destination must be 2 dimensional!"
 
         def _flatten(comp):
-            return sum([_flatten(i) for i in comp], []) if isinstance(comp, list) else [comp]
+            return reduce(operator.iadd, [_flatten(i) for i in comp], []) if isinstance(comp, list) else [comp]
 
         src_div = reduce(lambda a, b: a * b, [kwargs.get(k, 1) for k in _flatten(src_comp)], 1)
 
@@ -108,7 +109,7 @@ class ParallelManager:
         world_size = (world_size // src_div) * src_div
 
         assert world_size, (
-            f"Cannot define '{pattern}' with {kwargs}! " f"At least {src_div} ranks required, got {self.world_size}"
+            f"Cannot define '{pattern}' with {kwargs}! At least {src_div} ranks required, got {self.world_size}"
         )
         kwargs = {k: v for k, v in kwargs.items() if k in _flatten(src_comp)}
 

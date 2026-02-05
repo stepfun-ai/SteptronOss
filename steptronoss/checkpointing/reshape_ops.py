@@ -1,6 +1,7 @@
 import os
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from configurize import DataClass
@@ -117,7 +118,7 @@ class KeepThisEP(ReshapeOp):
 
         # Identify all expert IDs to infer total count and local range
         expert_ids = []
-        for k in piece.keys():
+        for k in piece:
             match = self.pattern.search(k)
             if match:
                 expert_ids.append(int(match.group(1)))
@@ -160,7 +161,7 @@ class KeepThisEP(ReshapeOp):
         # We check all gathered pieces to find the max local ID
         max_local_id = -1
         for p in gathered_pieces:
-            for k in p.keys():
+            for k in p:
                 match = self.pattern.search(k)
                 if match:
                     max_local_id = max(max_local_id, int(match.group(1)))
@@ -637,7 +638,7 @@ class OnlineReshaper(ReshapeOp):
         matched = set()
         for pattern in patterns:
             pattern = translate(pattern)
-            for k in weights.keys():
+            for k in weights:
                 if re.match(pattern, k):
                     matched.add(k)
 

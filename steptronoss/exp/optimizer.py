@@ -10,7 +10,6 @@ from steptronoss.exp.abstract import OptimizerConfig as AbstractOptimizerConfig
 
 
 class OptimizerConfig(AbstractOptimizerConfig):
-
     weight_decay: float
     weight_decay_on_1d_params: bool
 
@@ -116,16 +115,16 @@ class MuonConfig(OptimizerConfig):
         for name, param in model.named_parameters():
             if getattr(param, "is_muon_param", False):
                 is_muon_param = True
-            elif self.muon_param_attr_only:
-                is_muon_param = False
-            elif self.muon_exclude_embeddings and param in embedding_params:
-                is_muon_param = False
-            elif muon_exclude_names and any(tag in name for tag in muon_exclude_names):
+            elif (
+                self.muon_param_attr_only
+                or (self.muon_exclude_embeddings and param in embedding_params)
+                or (muon_exclude_names and any(tag in name for tag in muon_exclude_names))
+            ):
                 is_muon_param = False
             else:
                 is_muon_param = param.ndim == 2
 
-            setattr(param, "is_muon_param", is_muon_param)
+            param.is_muon_param = is_muon_param
 
     def mark_gather_ops(self, model: Module) -> NoReturn:
         """Attach merge_op for each parameter based on its TP partition info."""
@@ -148,7 +147,7 @@ class MuonConfig(OptimizerConfig):
             else:
                 merge_op = identity
 
-            setattr(param, "merge_op", merge_op)
+            param.merge_op = merge_op
 
     # Build param groups once so scheduler scales stay consistent across Muon/AdamW.
     def build_optimizer(self, model: Module) -> torch.optim.Optimizer:

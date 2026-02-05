@@ -3,8 +3,9 @@
 import json
 import os
 import random
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
-from typing import Any, Callable, Literal, Optional, TypedDict
+from typing import Any, Literal, TypedDict
 
 import ijson
 import torch
@@ -28,7 +29,7 @@ JMessageItem = TypedDict(
         "from": str,
         "content": str | list[MessageContentPart | str],
         "name": str,  # Agent name
-        "loss_mask": Optional[Literal[0, 1]],  # 1
+        "loss_mask": Literal[0, 1] | None,  # 1
     },
 )
 
@@ -43,7 +44,7 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         filelist: list[DataSourceFile],
-        template: Callable = None,
+        template: Callable | None = None,
     ):
         self.filelist = filelist
         data, valid_dialog_nums_per_file = self.read_from_file(filelist)
@@ -196,7 +197,7 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
 
     @classmethod
     def convert_dialog(cls, raw_dialog: list[JMessageItem], f_path: str = "") -> Dialog:
-        def get_tool_schemas(item: JMessageItem) -> Optional[list[dict]]:
+        def get_tool_schemas(item: JMessageItem) -> list[dict] | None:
             tools = item.get("tools", None)
             if tools:
                 return tools

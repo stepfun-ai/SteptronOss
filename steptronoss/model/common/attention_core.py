@@ -1,7 +1,5 @@
 """Attention core implementations for SteptronOss."""
 
-from typing import Optional
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -57,8 +55,8 @@ class FlashAttention(nn.Module):
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seq_len: Optional[int] = None,
+        cu_seqlens: torch.Tensor | None = None,
+        max_seq_len: int | None = None,
     ) -> torch.Tensor:
         """Compute flash attention.
 
@@ -164,7 +162,7 @@ class AttentionCore(nn.Module):
         v: torch.Tensor,
         *,
         is_causal: bool,
-        attn_mask: Optional[torch.Tensor],
+        attn_mask: torch.Tensor | None,
     ) -> torch.Tensor:
         return F.scaled_dot_product_attention(
             q,
@@ -180,8 +178,8 @@ class AttentionCore(nn.Module):
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seq_len: Optional[int] = None,
+        cu_seqlens: torch.Tensor | None = None,
+        max_seq_len: int | None = None,
     ) -> torch.Tensor:
         """Compute SDPA attention with FlashAttention-compatible inputs/outputs."""
         batch_size, seq_len, num_heads, head_dim = q.shape

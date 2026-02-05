@@ -6,7 +6,6 @@ from steptronoss.exp.abstract import SchedulerConfig as AbstractSchedulerConfig
 
 
 class SchedulerConfig(AbstractSchedulerConfig):
-
     lr: float
     """Initial learning rate. Depending on decay style and initial warmup,
     the learing rate at each iteration would be different."""

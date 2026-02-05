@@ -131,7 +131,7 @@ def test_moe_share_expert_ffn_backward_reference(monkeypatch, tp, ep):
     grad_cfg.clip_grad = 0.0
     grad_cfg.params_dtype = torch.bfloat16
     grad_cfg.use_distributed_optimizer = True
-    grad_manager = grad_cfg.build_gradient_manager(model=module)
+    _grad_manager = grad_cfg.build_gradient_manager(model=module)
 
     x = torch.randn(
         (16, 1, ffn_cfg.hidden_size),

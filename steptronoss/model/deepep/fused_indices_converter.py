@@ -204,8 +204,8 @@ class IndicesToMultihot(torch.autograd.Function):
         probs_in_multihot = torch.empty((num_of_tokens, num_of_local_experts), dtype=probs_indices.dtype, device="cuda")
         position_map = torch.empty((num_of_tokens, num_of_local_experts), dtype=torch.int32, device="cuda")
         # Compute the next power of 2 for the topk and num_of_local_experts
-        topk_next_power_of_2 = 2 ** int(math.ceil(math.log2(topk)))
-        num_of_local_experts_next_power_of_2 = 2 ** int(math.ceil(math.log2(num_of_local_experts)))
+        topk_next_power_of_2 = 2 ** math.ceil(math.log2(topk))
+        num_of_local_experts_next_power_of_2 = 2 ** math.ceil(math.log2(num_of_local_experts))
         grid = (num_of_tokens,)
         _indices_to_multihot_kernel[grid](
             indices,
@@ -249,8 +249,8 @@ class IndicesToMultihot(torch.autograd.Function):
         # Initialize the gradient of the indices and probs_indices
         grad_probs_indices = torch.empty((num_of_tokens, topk), dtype=grad_probs_in_multihot.dtype, device="cuda")
         # Compute the next power of 2 for the topk and num_of_local_experts
-        topk_next_power_of_2 = 2 ** int(math.ceil(math.log2(topk)))
-        num_of_local_experts_next_power_of_2 = 2 ** int(math.ceil(math.log2(num_of_local_experts)))
+        topk_next_power_of_2 = 2 ** math.ceil(math.log2(topk))
+        num_of_local_experts_next_power_of_2 = 2 ** math.ceil(math.log2(num_of_local_experts))
 
         grid = (num_of_tokens,)
         _multihot_to_indices_kernel[grid](

@@ -1,6 +1,6 @@
 import os
 import warnings
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import torch
 from torch.nn import functional as F
@@ -52,9 +52,9 @@ def set_tensor_model_parallel_attributes(tensor, is_parallel, dim, stride):
     for attribute in _MODEL_PARALLEL_ATTRIBUTE_DEFAULTS:
         assert not hasattr(tensor, attribute)
     # Set the attributes.
-    setattr(tensor, "tensor_model_parallel", is_parallel)
-    setattr(tensor, "partition_dim", dim)
-    setattr(tensor, "partition_stride", stride)
+    tensor.tensor_model_parallel = is_parallel
+    tensor.partition_dim = dim
+    tensor.partition_stride = stride
 
 
 def set_defaults_if_not_set_tensor_model_parallel_attributes(tensor):
@@ -492,15 +492,15 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(torch.autog
 def linear_with_grad_accumulation_and_async_allreduce(
     input,
     weight: torch.Tensor,
-    bias: Optional[torch.Tensor],
+    bias: torch.Tensor | None,
     gradient_accumulation_fusion: bool,
     async_grad_allreduce: bool,
     sequence_parallel_enabled: bool,
     is_column_parallel: bool,
     use_custom_tp_comm: bool = False,
     use_moe: bool = False,
-    custom_pre_recompute_function: Callable = None,
-    custom_pre_recompute_function_input: Optional[torch.Tensor] = None,
+    custom_pre_recompute_function: Callable | None = None,
+    custom_pre_recompute_function_input: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Linear layer execution with asynchronous communication and
     gradient accumulation fusion in backprop.
@@ -735,7 +735,7 @@ class ColumnParallelLinear(torch.nn.Module):
             if tp_world_size > 1:
                 assert self.async_tensor_model_parallel_allreduce
             assert not bias
-            setattr(self.weight, "expert_model_parallel", True)
+            self.weight.expert_model_parallel = True
 
     def forward(self, input_):
         """Forward of ColumnParallelLinear
@@ -866,7 +866,7 @@ class RowParallelLinear(torch.nn.Module):
                     dtype=params_dtype,
                 )
             )
-            setattr(self.bias, "sequence_parallel", sequence_parallel_enabled)
+            self.bias.sequence_parallel = sequence_parallel_enabled
 
             # Always initialize bias to zero.
             with torch.no_grad():
@@ -877,7 +877,7 @@ class RowParallelLinear(torch.nn.Module):
         if use_moe or parallel_output:
             assert not bias
             if use_moe:
-                setattr(self.weight, "expert_model_parallel", True)
+                self.weight.expert_model_parallel = True
 
     def forward(self, input_, custom_pre_recompute_function_input=None):
         """Forward of RowParallelLinear

@@ -1,7 +1,6 @@
-import math
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, TypedDict
+from typing import TypedDict
 from weakref import ref
 
 import torch
@@ -15,9 +14,9 @@ from steptronoss.utils.general import balanced_list_split
 class SteptronParameter(Parameter):
     main_grad: torch.FloatTensor
 
-    expert_model_parallel: Optional[bool]
-    manual_grad_bucket_prefix: Optional[str]
-    muon_bucket_signature: Optional[str]
+    expert_model_parallel: bool | None
+    manual_grad_bucket_prefix: str | None
+    muon_bucket_signature: str | None
 
     _log_name: str
 
@@ -55,7 +54,7 @@ class Range:
         return Range(start, start + self.size)
 
     def __str__(self):
-        return "%d,%d [%d]" % (self.start, self.end, self.size)
+        return f"{self.start},{self.end} [{self.size}]"
 
 
 class ParamInfo(TypedDict):

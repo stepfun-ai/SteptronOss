@@ -1,5 +1,3 @@
-from typing import Optional
-
 import torch
 from configurize import Config, Ref
 from torch.nn import functional as F
@@ -23,7 +21,7 @@ class FeedForwardConfig(Config):
     def activation(self, x):
         l, r = torch.chunk(x, 2, dim=-1)
         l = F.silu(l)
-        if self.swiglu_limit != None:
+        if self.swiglu_limit is not None:
             l = l.clamp(min=None, max=self.swiglu_limit)
             r = r.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
         return l * r

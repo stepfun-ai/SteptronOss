@@ -5,7 +5,7 @@ from .rms_norm import RMSNorm
 from .rope import YARNRoPE
 
 __all__ = [
+    "FlashAttention",
     "RMSNorm",
     "YARNRoPE",
-    "FlashAttention",
 ]

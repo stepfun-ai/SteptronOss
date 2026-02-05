@@ -1,6 +1,6 @@
 # Copyright (c) 2024, Stepfun Inc. All rights reserved.
 
-from typing import Callable, Optional, Sequence, Tuple, Union
+from collections.abc import Callable, Sequence
 
 import torch
 from torch import distributed as dist
@@ -12,11 +12,11 @@ from steptronoss.timers import get_timers
 
 
 def _communicate_shapes(
-    tensor_send_next: Optional[torch.Tensor],
-    tensor_send_prev: Optional[torch.Tensor],
+    tensor_send_next: torch.Tensor | None,
+    tensor_send_prev: torch.Tensor | None,
     recv_prev: bool,
     recv_next: bool,
-) -> Tuple[list[int], list[int]]:
+) -> tuple[list[int], list[int]]:
     """Communicate tensor shapes between stages. Used to communicate
     tensor shapes before the actual tensor communication happens.
     This is required when the sequence lengths across micro batches
@@ -107,10 +107,10 @@ def _communicate_shapes(
 
 def _batched_p2p_ops(
     *,
-    tensor_send_prev: Optional[torch.Tensor],
-    tensor_recv_prev: Optional[torch.Tensor],
-    tensor_send_next: Optional[torch.Tensor],
-    tensor_recv_next: Optional[torch.Tensor],
+    tensor_send_prev: torch.Tensor | None,
+    tensor_recv_prev: torch.Tensor | None,
+    tensor_send_next: torch.Tensor | None,
+    tensor_recv_next: torch.Tensor | None,
     group: dist.ProcessGroup,
 ) -> list[dist.Work]:
     ops = []
@@ -155,14 +155,14 @@ def _batched_p2p_ops(
 
 def _p2p_ops(
     *,
-    tensor_send_prev: Optional[torch.Tensor],
-    tensor_recv_prev: Optional[torch.Tensor],
-    tensor_send_next: Optional[torch.Tensor],
-    tensor_recv_next: Optional[torch.Tensor],
+    tensor_send_prev: torch.Tensor | None,
+    tensor_recv_prev: torch.Tensor | None,
+    tensor_send_next: torch.Tensor | None,
+    tensor_recv_next: torch.Tensor | None,
     group: dist.ProcessGroup,
 ) -> list[dist.Work]:
     reqs = []
-    rank = mpu.get_pipeline_model_parallel_rank()
+    _rank = mpu.get_pipeline_model_parallel_rank()
     if mpu.get_pipeline_model_parallel_rank() % 2 == 0:
         if tensor_send_next is not None:
             send_next_req = dist.isend(
@@ -232,15 +232,15 @@ def _p2p_ops(
 
 
 def _communicate(
-    tensor_send_next: Optional[torch.Tensor],
-    tensor_send_prev: Optional[torch.Tensor],
+    tensor_send_next: torch.Tensor | None,
+    tensor_send_prev: torch.Tensor | None,
     recv_prev: bool,
     recv_next: bool,
-    tensor_shape: Optional[Sequence[int]],
+    tensor_shape: Sequence[int] | None,
     cfg: MegatronPPModelConfig,
-    dtype_: Optional[torch.dtype] = None,
+    dtype_: torch.dtype | None = None,
     wait_on_reqs: bool = True,
-) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[list[dist.Work]]]:
+) -> tuple[torch.Tensor | None, torch.Tensor | None, list[dist.Work] | None]:
     """Communicate tensors between stages. Used as helper method in other
     communication methods that are used in steptron/schedules.py.
 
@@ -326,9 +326,9 @@ def _communicate(
 
 def recv_forward(
     cfg: MegatronPPModelConfig,
-    tensor_shape: Optional[Sequence[int]] = None,
-    dtype_: Optional[torch.dtype] = None,
-) -> Optional[torch.Tensor]:
+    tensor_shape: Sequence[int] | None = None,
+    dtype_: torch.dtype | None = None,
+) -> torch.Tensor | None:
     """Receive tensor from previous rank in pipeline (forward receive)."""
     timers = get_timers()
 
@@ -348,7 +348,7 @@ def recv_forward(
     return input_tensor
 
 
-def recv_backward(cfg: MegatronPPModelConfig, tensor_shape: Optional[Sequence[int]] = None) -> Optional[torch.Tensor]:
+def recv_backward(cfg: MegatronPPModelConfig, tensor_shape: Sequence[int] | None = None) -> torch.Tensor | None:
     """Receive tensor from next rank in pipeline (backward receive)."""
     timers = get_timers()
 
@@ -370,8 +370,8 @@ def recv_backward(cfg: MegatronPPModelConfig, tensor_shape: Optional[Sequence[in
 def send_forward(
     cfg: MegatronPPModelConfig,
     output_tensor: torch.Tensor,
-    tensor_shape: Optional[Sequence[int]] = None,
-    dtype_: Optional[torch.dtype] = None,
+    tensor_shape: Sequence[int] | None = None,
+    dtype_: torch.dtype | None = None,
 ) -> None:
     """Send tensor to next rank in pipeline (forward send)."""
     timers = get_timers()
@@ -392,7 +392,7 @@ def send_forward(
 def send_backward(
     cfg: MegatronPPModelConfig,
     input_tensor_grad: torch.Tensor,
-    tensor_shape: Optional[Sequence[int]] = None,
+    tensor_shape: Sequence[int] | None = None,
 ) -> None:
     """Send tensor to previous rank in pipeline (backward send)."""
     timers = get_timers()
@@ -412,8 +412,8 @@ def send_backward(
 def send_forward_recv_backward(
     cfg: MegatronPPModelConfig,
     output_tensor: torch.Tensor,
-    tensor_shape: Optional[Sequence[int]] = None,
-) -> Optional[torch.Tensor]:
+    tensor_shape: Sequence[int] | None = None,
+) -> torch.Tensor | None:
     """Batched send and recv with next rank in pipeline."""
     timers = get_timers()
 
@@ -435,8 +435,8 @@ def send_forward_recv_backward(
 def send_backward_recv_forward(
     cfg: MegatronPPModelConfig,
     input_tensor_grad: torch.Tensor,
-    tensor_shape: Optional[Sequence[int]] = None,
-) -> Optional[torch.Tensor]:
+    tensor_shape: Sequence[int] | None = None,
+) -> torch.Tensor | None:
     """Batched send and recv with previous rank in pipeline."""
     timers = get_timers()
 
@@ -459,9 +459,9 @@ def send_forward_recv_forward(
     cfg: MegatronPPModelConfig,
     output_tensor: torch.Tensor,
     recv_prev: bool,
-    tensor_shape: Optional[Sequence[int]] = None,
+    tensor_shape: Sequence[int] | None = None,
     overlap_p2p_comm: bool = False,
-) -> Union[Optional[torch.Tensor], Tuple[Optional[torch.Tensor], Callable[[], None]]]:
+) -> torch.Tensor | None | tuple[torch.Tensor | None, Callable[[], None]]:
     """Batched recv from previous rank and send to next rank in pipeline."""
     timers = get_timers()
 
@@ -492,9 +492,9 @@ def send_backward_recv_backward(
     cfg: MegatronPPModelConfig,
     input_tensor_grad: torch.Tensor,
     recv_next: bool,
-    tensor_shape: Optional[Sequence[int]] = None,
+    tensor_shape: Sequence[int] | None = None,
     overlap_p2p_comm: bool = False,
-) -> Union[Optional[torch.Tensor], Tuple[Optional[torch.Tensor], Callable[[], None]]]:
+) -> torch.Tensor | None | tuple[torch.Tensor | None, Callable[[], None]]:
     """Batched recv from next rank and send to previous rank in pipeline."""
     timers = get_timers()
 
@@ -529,8 +529,8 @@ def send_forward_backward_recv_forward_backward(
     input_tensor_grad: torch.Tensor,
     recv_prev: bool,
     recv_next: bool,
-    tensor_shape: Optional[Sequence[int]] = None,
-) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    tensor_shape: Sequence[int] | None = None,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     """Batched send and recv with previous and next ranks in pipeline."""
     timers = get_timers()
 

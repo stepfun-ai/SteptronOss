@@ -14,7 +14,7 @@ from steptronoss.core.parallel_state import PM, get_vpp_size, set_vpp_rank
 from steptronoss.core.trainers.base_trainer import BaseTrainer
 from steptronoss.exp.base_exp import DataConfig, Megatron3DParallelModelConfig
 from steptronoss.exp.ntp import PretrainExp, PretrainMetricConfig
-from steptronoss.initialize import mtp_initialize, set_mpu_random_seed
+from steptronoss.initialize import set_mpu_random_seed
 from steptronoss.model.common.moe_block import MoEBlock
 
 # from steptronoss.model.distributed import DistributedDataParallel as LocalDDP
@@ -24,12 +24,10 @@ from steptronoss.optimizer.base_gradient_manager import GradientManager
 from steptronoss.optimizer.hparam_scheduler import Scheduler
 from steptronoss.timers import init_timers
 from steptronoss.utils import (
-    calc_params_l2_norm,
     convert_num,
     get_mem_brief,
     print_n_params,
     setup_logger,
-    try_save,
 )
 from steptronoss.utils.metrics import GlobalMetrics
 
@@ -224,7 +222,6 @@ class DecoderPretrainTrainer(BaseTrainer):
 
         # Forward pass.
         with self.timers.record("forward-backward", log_level=1):
-
             for hook in self._before_step_hooks:
                 hook(self)
 
@@ -479,7 +476,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         torch.distributed.all_reduce(dumping_flag)
 
         if dumping_flag > 0:
-            logger.warning("Last uploading not finished. " "Consider increasing your save_interval!")
+            logger.warning("Last uploading not finished. Consider increasing your save_interval!")
             if working_threads:
                 for t in working_threads:
                     t.join()

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-# -*- coding:utf-8 -*-
 # Copyright (c) Stepfun Inc. All rights reserved.
 
-import inspect
 import os
 import re
 import sys
@@ -96,7 +94,7 @@ def setup_logger(
     if world_size is None:
         world_size = int(os.getenv("WORLD_SIZE", "1"))
 
-    filename = filename + "_{}.txt".format(str(distributed_rank))
+    filename = filename + f"_{distributed_rank!s}.txt"
     save_file = os.path.join(save_dir, filename)
     if mode == "o" and smart_exists(save_file):
         smart_remove(save_file)

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Literal, Optional, TypedDict, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 import torch
 from configurize import Config, DataClass, Ref, writable_property
 
-from steptronoss.exp.base_exp import Megatron3DParallelModelConfig, ParallelConfig
+from steptronoss.exp.base_exp import Megatron3DParallelModelConfig
 from steptronoss.tokenizer.hf_compat_tokenizer import HFCompatTokenizer
 
 if TYPE_CHECKING:
@@ -19,8 +20,8 @@ class SamplingParams(DataClass):
     temperature: float
     top_p: float
     top_k: int
-    stop: Optional[list[str]]
-    stop_token_ids: Optional[list[int]]
+    stop: list[str] | None
+    stop_token_ids: list[int] | None
 
 
 class MetaDict(TypedDict, total=False):
@@ -100,7 +101,7 @@ class PartialRolloutConfig(Config):
             assert False, "No partial rollout stop condition provided"
 
     def record_metrics(self, metrics, full_rollouts, partial_rollouts):
-        if self.enabled == False:
+        if not self.enabled:
             return
         metrics.partial_remaining_samples.add(len(partial_rollouts))
 
@@ -115,7 +116,7 @@ class PartialRolloutConfig(Config):
                 ) + partial_rollout_tokens
             for turn, token_len in enumerate(partial_rollout_tokens):
                 metrics.partial_rollout_mean_tokens_in_turn.add(
-                    token_len, subname=f"{self.max_num_partial_turns-1-turn}"
+                    token_len, subname=f"{self.max_num_partial_turns - 1 - turn}"
                 )
 
 
@@ -219,7 +220,7 @@ class VLLMInferenceConfig(BaseInferenceConfig):
         """Customizable function to indicate how to load weight for vllm model."""
         return model.load_state_dict(state_dict, strict=True)
 
-    def adapt_vllm_input(self, gen_input: GenerationInput) -> "TokensPrompt":
+    def adapt_vllm_input(self, gen_input: GenerationInput) -> TokensPrompt:
         from vllm import TokensPrompt
 
         input_ids = gen_input.input_ids
@@ -273,7 +274,7 @@ class RolloutManagerConfig(Config):
     - rank1 -> run([4, 5])       -balance-> [3, 4, 5]
     """
 
-    auto_balance_infer_dp: Union[bool, float] = 1.0
+    auto_balance_infer_dp: bool | float = 1.0
     """Automatically balance prompts when sending to inference DP. Each prompt
     will be sent to inference DP that receives the least number of prompts.
     - Set to True to force balance for all prompts.

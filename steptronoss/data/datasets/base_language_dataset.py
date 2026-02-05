@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal, Optional, TypedDict
+from typing import Literal, TypedDict
 
 
 class Role(str, Enum):
@@ -17,19 +17,19 @@ class MessageContentType(str, Enum):
     TOKEN = "token"
 
 
-VALID_MESSAGE_CONTENT_TYPES = set(m.value for m in MessageContentType)
+VALID_MESSAGE_CONTENT_TYPES = {m.value for m in MessageContentType}
 
 
 class MessageContentPart(TypedDict):
     type: MessageContentType
     value: str
-    loss_mask: Optional[Literal[0, 1]]
+    loss_mask: Literal[0, 1] | None
 
 
 class MessageItem(TypedDict):
     role: Role
     content: list[MessageContentPart]
-    name: Optional[str]
+    name: str | None
     loss_mask: Literal[0, 1]
     reward_type: list[str] = ["any"]
 
