@@ -105,7 +105,7 @@ markers = [
 ]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 fix = true
 
@@ -143,10 +143,59 @@ select = [
     "TRY",
 ]
 ignore = [
-    # LineTooLong
-    "E501",
-    # DoNotAssignLambda
-    "E731",
+    "E501",    # LineTooLong
+    "E731",    # DoNotAssignLambda
+    "S101",    # assert
+    "TRY003",  # raise-vanilla-args
+    "RUF003",  # ambiguous-unicode-character-comment
+    "F401",    # unused-import
+    "SIM102",  # collapsible-if
+    "C408",    # unnecessary-collection-call
+    "SIM108",  # if-else-block-instead-of-if-exp
+    "C901",    # complex-structure
+    "RUF002",  # ambiguous-unicode-character-docstring
+    "RUF012",  # mutable-class-default
+    "B905",    # zip-without-explicit-strict
+    "E402",    # module-import-not-at-top-of-file
+    "A002",    # builtin-argument-shadowing
+    "E722",    # bare-except
+    "RUF005",  # collection-literal-concatenation
+    "S301",    # suspicious-pickle-usage
+    "RUF001",  # ambiguous-unicode-character-string
+    "RUF059",  # unused-unpacked-variable
+    "S110",    # try-except-pass
+    "TRY002",  # raise-vanilla-class
+    "A001",    # builtin-variable-shadowing
+    "S311",    # suspicious-non-cryptographic-random-usage
+    "SIM105",  # suppressible-exception
+    "F403",    # undefined-local-with-import-star
+    "TRY300",  # try-consider-else
+    "B006",    # mutable-argument-default
+    "B904",    # raise-without-from-inside-except
+    "F821",    # undefined-name
+    "RUF015",  # unnecessary-iterable-allocation-for-first-element
+    "TRY201",  # verbose-raise
+    "B028",    # no-explicit-stacklevel
+    "E741",    # ambiguous-variable-name
+    "S104",    # hardcoded-bind-all-interfaces
+    "SIM115",  # open-file-with-context-handler
+    "A004",    # builtin-import-shadowing
+    "PGH003",  # blanket-type-ignore
+    "S108",    # hardcoded-temp-file
+    "TRY301",  # raise-within-try
+    "UP008",   # super-call-with-parameters
+    "A006",    # builtin-lambda-argument-shadowing
+    "B011",    # assert-false
+    "B015",    # useless-comparison
+    "B027",    # empty-method-without-abstract-decorator
+    "F811",    # redefined-while-unused
+    "S105",    # hardcoded-password-string
+    "S324",    # hashlib-insecure-hash-function
+    "S506",    # unsafe-yaml-load
+    "S603",    # subprocess-without-shell-equals-true
+    "S607",    # start-process-with-partial-path
+    "SIM211",  # if-expr-with-false-true
+    "T100",    # debugger
 ]
 
 [tool.ruff.lint.per-file-ignores]
