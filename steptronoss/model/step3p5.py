@@ -2,6 +2,7 @@ from torch import nn
 
 from steptronoss.core.parallel_state import PM, get_vpp_rank
 from steptronoss.model.common.grouped_query_attention import AttentionConfig
+from steptronoss.model.common.moe_share_expert_ffn import MoEFeedForwardConfig
 from steptronoss.model.common.rms_norm import RMSNorm
 from steptronoss.model.decoder_model import (
     DecoderLLMConfig,
@@ -13,6 +14,7 @@ from steptronoss.model.decoder_model import (
 
 class Step3p5ModelConfig(DecoderLLMConfig):
     swa_cfg: AttentionConfig
+    ffn_cfg: MoEFeedForwardConfig
     swa_layer_list: list[bool]
 
     def sanity_check(self):
@@ -26,7 +28,7 @@ class Step3p5Block(TransformerBlock):
     """
 
     def __init__(self, cfg: Step3p5ModelConfig, layer_id, recompute=False):
-        super(nn.Module, self).__init__(cfg)
+        super(TransformerBlock, self).__init__()
 
         self.cfg = cfg
         self.layer_id = layer_id

@@ -87,9 +87,9 @@ class FlashAttention(nn.Module):
             v = v.reshape(-1, v.shape[2], head_dim)
 
             output = flash_attn_varlen_func(
-                q,
-                k,
-                v,
+                q.contiguous(),
+                k.contiguous(),
+                v.contiguous(),
                 cu_seqlens_q=cu_seqlens_q,
                 cu_seqlens_k=cu_seqlens_k,
                 max_seqlen_q=max_q_len,
@@ -155,7 +155,7 @@ class AttentionCore(nn.Module):
                 allowed = (k_idx <= q_idx) & (k_idx >= (q_idx - window))
             else:
                 allowed = (k_idx - q_idx).abs() <= window
-        return ~allowed  # True means masked for SDPA
+        return allowed  # True means keep for SDPA bool masks
 
     def _sdpa(
         self,

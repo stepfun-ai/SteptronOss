@@ -31,7 +31,7 @@ class Step3p5FlashAttentionConfig(AttentionConfig):
         self.use_headwise_attn_gate = True
         self.use_qkv_bias = False
 
-        self.sliding_window_size = 512
+        self.sliding_window_size = None
 
         self.use_qk_norm = False  # Inverted in module: False here enables QK norm
         self.layernorm_epsilon = 1e-5
@@ -51,6 +51,7 @@ class Step3p5FlashSWAConfig(Step3p5FlashAttentionConfig):
     def __init__(self):
         super().__init__()
         self.use_sliding_window = True
+        self.sliding_window_size = 512
         self.num_attention_heads = 96
         self.qk_rope_head_dim = 128
         self.rope_theta = 10_000

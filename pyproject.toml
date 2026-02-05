@@ -10,11 +10,11 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
@@ -36,13 +36,14 @@ dependencies = [
     "safetensors",
     "setuptools",
     "tabulate",
-    "torch",
+    "torch==2.8.0",
     "tqdm",
     "transformers",
-    "triton",
+    "triton==3.4.0",
     "uvicorn",
     "wandb",
     "httpx",
+    "pip>=25.3",
 ]
 
 
@@ -71,6 +72,8 @@ dev = [
     "isort",
     "py-spy",
     "debugpy",
+    "ipython>=8.38.0",
+    "nvitop>=1.6.2",
 ]
 
 [tool.uv.extra-build-dependencies]

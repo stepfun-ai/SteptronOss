@@ -170,8 +170,8 @@ class GroupedExperts(torch.nn.Module):
         # skip grouped_gemm to avoid backend asserts and return zeros while still
         # participating in the ETP reduction.
         if experts_histogram.numel() == 0 or int(experts_histogram.sum().item()) == 0:
-            x = x.new_zeros(x.shape)
             x = reduce_from_tensor_model_parallel_region(x, group="ETP")
+            x = x * token_weights.sum()
             return x
 
         scatter_index = index_compute(token_expert_ids, experts_histogram)
@@ -436,3 +436,54 @@ class MoEBlock(nn.Module):
     def state_dict(self, *args, **kwargs):
         self.maintain_float32_router_balance_bias()  # switch to float32 before saving
         return super().state_dict(*args, **kwargs)
+
+    @staticmethod
+    def update_router_balance_bias_per_gbs(models: nn.Module):
+        """This shall be called for each step, with whole model as input"""
+        moe_layers: list[MoEBlock] = []
+        tokens_per_expert_list = []
+        router_bias_list = []
+        router_bias_update_rate_list = []
+
+        for layer in models.modules():
+            if (
+                isinstance(layer, MoEBlock)
+                and layer.cfg.enable_auxiliary_loss_free_load_balance
+                and layer.router_balance_bias is not None
+                and layer.micro_batch_count > 0
+            ):
+                moe_layers.append(layer)
+                tokens_per_expert_list.append(layer.local_tokens_per_expert)
+                router_bias_list.append(layer.router_balance_bias)
+                router_bias_update_rate_list.append(layer.router_bias_update_rate)
+
+        if not moe_layers:
+            return
+
+        # Stack tokens from all eligible MoE layers and reduce once to save communications
+        stacked_tokens_per_expert = torch.stack(tokens_per_expert_list, dim=0)
+
+        dist.all_reduce(stacked_tokens_per_expert, op=dist.ReduceOp.SUM, group=PM.group_of("ETP"))
+        dist.all_reduce(stacked_tokens_per_expert, op=dist.ReduceOp.SUM, group=PM.group_of("EP"))
+
+        dist.all_reduce(stacked_tokens_per_expert, op=dist.ReduceOp.SUM, group=PM.group_of("EDP"))
+
+        stacked_tokens_per_expert = stacked_tokens_per_expert.float()
+
+        updated_bias_list = []
+        for tokens_per_expert, bias, update_rate in zip(
+            stacked_tokens_per_expert, router_bias_list, router_bias_update_rate_list
+        ):
+            average_tokens = tokens_per_expert.mean(dim=-1, keepdim=True)
+            offset = average_tokens - tokens_per_expert
+            updated_bias_list.append(bias + torch.sign(offset) * update_rate)
+
+        stacked_updated_bias = torch.stack(updated_bias_list, dim=0)
+
+        # may be not needed
+        dist.all_reduce(stacked_updated_bias, op=dist.ReduceOp.AVG, group=PM.group_of("DP"))
+
+        for layer, updated_bias in zip(moe_layers, stacked_updated_bias):
+            layer.router_balance_bias.copy_(updated_bias)
+            layer.local_tokens_per_expert.zero_()
+            layer.micro_batch_count = 0

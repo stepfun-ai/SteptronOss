@@ -8,7 +8,7 @@ from einops import rearrange
 from loguru import logger
 
 from steptronoss.core.parallel_state import PM
-from steptronoss.utils.dist_utils import gather_dict
+from steptronoss.utils.dist_utils import all_gather_dict
 from steptronoss.utils.weight_loader import HFWeights, translate
 
 UnifiedTensorDict = dict[Any, torch.Tensor]
@@ -50,11 +50,12 @@ class ReshapeOp:
             return new_ops
 
 
-_SKIP_RESHAPE = object()
+class Identity(ReshapeOp):
+    def forward(self, piece):
+        return piece
 
-
-def _is_skip_reshape(piece) -> bool:
-    return piece is _SKIP_RESHAPE
+    def backward(self, piece):
+        return piece
 
 
 class Sequential(ReshapeOp):
@@ -68,11 +69,7 @@ class Sequential(ReshapeOp):
 
     def backward(self, piece):
         for op in self.ops[::-1]:
-            if _is_skip_reshape(piece):
-                return {}
             piece = op.backward(piece)
-            if _is_skip_reshape(piece):
-                return {}
         return piece
 
     def append(self, op: ReshapeOp):
@@ -80,10 +77,7 @@ class Sequential(ReshapeOp):
 
 
 def _gather_reshape_piece(piece: dict, group):
-    gathered = gather_dict(piece, group=group, dst=0)
-    if gathered is None:
-        return _SKIP_RESHAPE
-    return gathered
+    return all_gather_dict(piece, group=group)
 
 
 class KeepThisTP(ReshapeOp):
@@ -98,8 +92,6 @@ class KeepThisTP(ReshapeOp):
     def backward(self, piece: dict) -> dict:
         # {} -> [{}, {}]
         raw_piece = _gather_reshape_piece(piece, group=PM.group_of(self.group))
-        if _is_skip_reshape(raw_piece):
-            return raw_piece
         # [{A:1}, {A:2}] -> {A:[1, 2]}
         keys = set()
         for p in raw_piece:
@@ -163,8 +155,6 @@ class KeepThisEP(ReshapeOp):
 
         # Gather all pieces from EP group
         gathered_pieces = _gather_reshape_piece(piece, group=PM.group_of("EP"))
-        if _is_skip_reshape(gathered_pieces):
-            return gathered_pieces
 
         # Infer num_local_experts to calculate offsets
         # We check all gathered pieces to find the max local ID
@@ -354,6 +344,8 @@ class GQAMergeQKV(ReshapeOp):
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
         assert len(piece) == 1
         key_pattern: str = list(piece)[0].replace("qkv", "{}")
+        if "{}" not in key_pattern:
+            key_pattern += ".{}"
         tensors = piece[key_pattern.format("qkv")]
 
         n_kv_dims = self.group_num * self.head_dim * 2 // PM.size_of("TP")
@@ -404,6 +396,8 @@ class GQAMergeQKVBias(ReshapeOp):
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
         assert len(piece) == 1
         key_pattern: str = list(piece)[0].replace("qkv", "{}")
+        if "{}" not in key_pattern:
+            key_pattern += ".{}"
         tensors = piece[key_pattern.format("qkv")]
 
         n_kv_dims = self.group_num * self.head_dim * 2 // PM.size_of("TP")
@@ -459,6 +453,8 @@ class GQAMergeQKVG(ReshapeOp):
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
         assert len(piece) == 1
         key_pattern: str = list(piece)[0].replace("qkv", "{}")
+        if "{}" not in key_pattern:
+            key_pattern += ".{}"
         tensors = piece[key_pattern.format("qkv")]
 
         n_kv_dims = self.group_num * self.head_dim * 2 // PM.size_of("TP")
@@ -496,9 +492,9 @@ class FFNMergeGateUp(ReshapeOp):
         assert len(piece) == 2
         kgate = kup = None
         for k in piece:
-            if "gate_proj" in k:
+            if "gate" in k:
                 kgate = k
-            if "up_proj" in k:
+            if "up" in k:
                 kup = k
         assert all([kgate, kup])
         gate = piece[kgate].chunk(PM.size_of(self.group), -2)[PM.rank_in(self.group)]
@@ -513,6 +509,8 @@ class FFNMergeGateUp(ReshapeOp):
     def backward(self, piece: SplitedTensorDict) -> UnifiedTensorDict:
         assert len(piece) == 1
         key_pattern: str = list(piece)[0].replace("gate_up", "{}")
+        if "{}" not in key_pattern:
+            key_pattern += ".{}"
         tensors = piece[key_pattern.format("gate_up")]
 
         gates, ups = [], []
@@ -666,9 +664,6 @@ class OnlineReshaper(ReshapeOp):
             raw_piece = self.get_piece_by_pattern(weights, script_piece.dst)
 
             new_piece = script_piece.op.backward(raw_piece)
-
-            if _is_skip_reshape(new_piece):
-                continue
 
             if script_piece.src is None:
                 script_piece.src = list(new_piece.keys())

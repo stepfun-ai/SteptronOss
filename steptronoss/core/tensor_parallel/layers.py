@@ -30,8 +30,8 @@ _MODEL_PARALLEL_ATTRIBUTE_DEFAULTS = {
     "partition_stride": 1,
     "expert_model_parallel": False,
     "manual_grad_bucket_prefix": None,
-    "sharded_tensor_config": None,
     "is_muon_param": False,
+    "merge_op": None,
     "sequence_parallel": False,
     "micro_dp": False,
     "shared": False,
@@ -219,6 +219,15 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         handle = None
 
         def get_grad_weight(total_input, grad_output, weight):
+            # Doing gather + slicing during the NeMo forward pass can make this tensor
+            # not be contiguous. PyTorch only checks if the tensor is contiguous, and only
+            # clones it if it's not contiguous:
+            # https://github.com/pytorch/pytorch/blob/c47cf9bc7f9e02f649ab4ed53fe4d35732c92ab6/torch/_refs/__init__.py#L2761
+            grad_output = grad_output.contiguous()
+            if grad_output.dim() == 3:
+                # Convert the tensor shapes to 2D for execution compatibility
+                grad_output = grad_output.view(grad_output.shape[0] * grad_output.shape[1], grad_output.shape[2])
+                total_input = total_input.view(total_input.shape[0] * total_input.shape[1], total_input.shape[2])
             if ctx.gradient_accumulation_fusion:
                 if weight.main_grad.dtype == torch.float32:
                     fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(total_input, grad_output, weight.main_grad)
@@ -285,15 +294,6 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         if ctx.sequence_parallel:
             if handle is not None:
                 handle.wait()
-
-        # Doing gather + slicing during the NeMo forward pass can make this tensor
-        # not be contiguous. PyTorch only checks if the tensor is contiguous, and only
-        # clones it if it's not contiguous:
-        # https://github.com/pytorch/pytorch/blob/c47cf9bc7f9e02f649ab4ed53fe4d35732c92ab6/torch/_refs/__init__.py#L2761
-        grad_output = grad_output.contiguous()
-        # Convert the tensor shapes to 2D for execution compatibility
-        grad_output = grad_output.view(grad_output.shape[0] * grad_output.shape[1], grad_output.shape[2])
-        total_input = total_input.view(total_input.shape[0] * total_input.shape[1], total_input.shape[2])
 
         if ctx.async_grad_allreduce and not ctx.use_moe:
             # Asynchronous all-reduce
@@ -486,7 +486,7 @@ class LinearWithGradAccumulationAndAsyncCommunicationWithPrefunction(torch.autog
             custom_pre_recompute_function_input_grad = grads[1]
         else:
             custom_pre_recompute_function_input_grad = None
-        return (grads[0], grad_weight, grad_bias) + (None,) * 5 + (custom_pre_recompute_function_input_grad,) + (None,)
+        return (grads[0], grad_weight, grad_bias) + (None,) * 6 + (custom_pre_recompute_function_input_grad,)
 
 
 def linear_with_grad_accumulation_and_async_allreduce(
