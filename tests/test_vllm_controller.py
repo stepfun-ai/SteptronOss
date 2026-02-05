@@ -50,8 +50,8 @@ def test_run_vllm_spawns_process(monkeypatch):
         captured["env"] = kwargs.get("env")
         return fake_proc
 
-    monkeypatch.setattr("steptronoss.generation.vllm_controller.get_free_port", lambda: 50001)
-    monkeypatch.setattr("steptronoss.generation.vllm_controller.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("steptronoss.generation.vllm.vllm_controller.get_free_port", lambda: 50001)
+    monkeypatch.setattr("steptronoss.generation.vllm.vllm_controller.subprocess.Popen", _fake_popen)
 
     controller.run_vllm()
 
@@ -73,15 +73,15 @@ def test_register_and_deregister(monkeypatch):
 
     monkeypatch.setattr("requests.get", _fake_get)
     monkeypatch.setattr(
-        "steptronoss.generation.vllm_controller.get_exp_redis",
+        "steptronoss.generation.vllm.vllm_controller.get_exp_redis",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "steptronoss.generation.vllm_controller.block_get_redis",
+        "steptronoss.generation.vllm.vllm_controller.block_get_redis",
         lambda _client, _key: b"127.0.0.1:9000",
     )
     monkeypatch.setattr(
-        "steptronoss.generation.vllm_controller.socket.gethostbyname",
+        "steptronoss.generation.vllm.vllm_controller.socket.gethostbyname",
         lambda _name: "10.0.0.1",
     )
 

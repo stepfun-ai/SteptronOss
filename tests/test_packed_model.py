@@ -126,6 +126,8 @@ def _run_one_step(packed: PackedModel, x: torch.Tensor, y: torch.Tensor):
 
 @pytest.mark.parametrize("use_distributed_optimizer", [False, True])
 def test_packed_model_offload_backload_buffers(dist_and_mesh, use_distributed_optimizer):
+    torch.cuda.empty_cache()
+    base = torch.cuda.memory_allocated()
     packed = _build_packed_model(use_distributed_optimizer)
 
     packed.optimizer_step()
@@ -134,25 +136,25 @@ def test_packed_model_offload_backload_buffers(dist_and_mesh, use_distributed_op
     torch.cuda.synchronize()
     # 18 GiB = 2 + 4 + 12
 
-    assert_memory_around(18e6)
+    assert_memory_around(base + 18e6)
 
     packed._offload_grad_buffer()
-    assert_memory_around(14e6)
+    assert_memory_around(base + 14e6)
 
     packed._offload_param()
-    assert_memory_around(12e6)
+    assert_memory_around(base + 12e6)
 
     packed._offload_optimizer_state()
-    assert_memory_around(0e6)
+    assert_memory_around(base + 0e6)
 
     packed._backload_param()
-    assert_memory_around(2e6)
+    assert_memory_around(base + 2e6)
 
     packed._backload_grad_buffer()
-    assert_memory_around(6e6)
+    assert_memory_around(base + 6e6)
 
     packed._backload_optimizer_state()
-    assert_memory_around(18e6)
+    assert_memory_around(base + 18e6)
 
 
 @pytest.mark.parametrize("use_distributed_optimizer", [False, True])
@@ -169,6 +171,9 @@ def test_packed_model_offload_backload_preserves_step(dist_and_mesh, use_distrib
 
     packed_b._offload_grad_buffer()
     packed_b._backload_grad_buffer()
+
+    packed_b._offload_param()
+    packed_b._backload_param()
 
     packed_b._offload_optimizer_state()
     packed_b._backload_optimizer_state()
