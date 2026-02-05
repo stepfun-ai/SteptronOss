@@ -203,26 +203,6 @@ class VLLMDeployConfig(BaseInferenceConfig):
 
         return cmd, envs
 
-    def deploy_train_model(self, models: list[torch.nn.Module]):
-
-        from steptronoss.checkpointing.hf_checkpoint import dump_safetensors
-        from steptronoss.core.parallel_state import PM
-
-        cli = self.build_cli()
-
-        dump_safetensors(
-            save_path=self.hot_path,
-            model_reference_path=self.model_config_path,
-            tokenizer_reference_path=self.tokenizer_path,
-            models=models,
-        )
-
-        if PM.world_rank == 0:
-            cli.wait_for_server()
-            cli.reload_weights(self.hot_path)
-
-        cli.wait_for_server()
-
     def get_sampling_params(self, override_params: dict = {}):
 
         # Handle top_k

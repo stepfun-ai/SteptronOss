@@ -13,7 +13,7 @@ from steptronoss.exp.inference import VLLMDeployConfig
 from steptronoss.utils.comm_utils import block_get_redis, get_exp_redis
 from steptronoss.utils.general import get_free_port
 
-HEALTHY_CHECK_INTERVAL = 5
+HEALTHY_CHECK_INTERVAL = 10
 
 
 class VLLMController:
@@ -23,8 +23,10 @@ class VLLMController:
         self.vllm_port: int | None = None
         self.endpoint: str | None = None
         self.router_url: str = None
+        self._shutdown_called = False
 
     def start(self):
+        signal.signal(signal.SIGTERM, self._handle_sigterm)
         atexit.register(self.shutdown)
         self.run_vllm()
         self.wait_for_health()
@@ -112,6 +114,9 @@ class VLLMController:
             logger.warning(f"Router unregister request failed: {exc}")
 
     def shutdown(self):
+        if self._shutdown_called:
+            return
+        self._shutdown_called = True
         self.deregister()
         self._terminate_vllm()
 
@@ -125,3 +130,8 @@ class VLLMController:
         except subprocess.TimeoutExpired:
             logger.warning("vLLM did not exit in time; force killing.")
             os.killpg(self.process.pid, signal.SIGKILL)
+
+    def _handle_sigterm(self, signum, frame):
+        logger.info("Received SIGTERM; shutting down vLLM controller.")
+        self.shutdown()
+        raise SystemExit(0)

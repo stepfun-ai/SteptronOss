@@ -166,26 +166,6 @@ class DecoderPretrainTrainer(BaseTrainer):
             GlobalMetrics.iteration_time.add(elapsed_time)
             self.training_log(update_successful)
 
-            # if self.exp.trainer_cfg.eval_interval and self.exp.eval_cfg is not None:
-            #     if self.iteration % self.exp.trainer_cfg.eval_interval == 0:
-            #         if self.optimizer is not None:
-            #             self.optimizer._cpu_offload(adam_only=False, zero_grad=False)
-            #         self.evaluator.initialize(eval_model=self.models)
-            #         eval_results, eval_samples = self.evaluator.eval()
-            #         if self.evaluator.is_master:
-            #             logger.info(
-            #                 f"Eval: Iter: {self.iteration}, {' | '.join([f'{k}: {v}' for k, v in eval_results.items()])}"
-            #             )
-            #             try_save(
-            #                 eval_samples,
-            #                 self.exp.checkpoint_cfg.save_path
-            #                 + f"/eval_samples_it{self.iteration}.pt",
-            #             )
-            #         if self.tb_writer:
-            #             for k, v in eval_results.items():
-            #                 self.tb_writer.add_scalar(f"Eval/{k}", v, self.iteration)
-            #         if self.optimizer is not None:
-            #             self.optimizer._cpu_backload(adam_only=False)
             if (
                 self.exp.checkpoint_cfg.save_path
                 and self.exp.checkpoint_cfg.save_interval

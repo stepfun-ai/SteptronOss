@@ -1,3 +1,5 @@
+import copy
+import gc
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import Any
@@ -5,6 +7,7 @@ from typing import Any
 import torch
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from torch.nn import Parameter
+from torch.utils.hooks import RemovableHandle
 
 from steptronoss.core import tensor_parallel
 from steptronoss.core.parallel_state import PM
@@ -73,14 +76,11 @@ class GradientManager(ABC):
         self.model = model
         self.optimizer = optimizer
 
-        self._grad_buffers, self._param_buffers, self._param_info = build_grad_buffers(self.model)
-
-        # attach slices onto tensor.main_grad
-        for param, info in self._param_info.items():
-            param.main_grad = info["fp32_buffer"]()[info["range"]].view(param.shape)
+        self.build_buffer()
 
         # We need to store them so they don't go out of scope.
-        self._grad_acc_hooks = self._add_grad_acc_hooks(self.model)
+        self._grad_acc_hook_handles: list[tuple[RemovableHandle, object]] = []
+        self._add_grad_acc_hooks(self.model)
 
         # NOTE: Now grad produced by torch will be automatically added to _grad_buffer
 
@@ -130,6 +130,38 @@ class GradientManager(ABC):
     @abstractmethod
     def step(self) -> tuple[bool, float | None, int | None]:
         pass
+
+    def destroy_buffer(self):
+        # NOTE: this also clear gradients
+        torch.cuda.synchronize()
+        self.optimizer.zero_grad()
+
+        self._param_buffers.clear()
+        self._grad_buffers.clear()
+        for p in self._param_info:
+            p.main_grad = None  # remove reference
+
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    def build_buffer(self):
+        # create new
+        self._grad_buffers, self._param_buffers, self._param_info = build_grad_buffers(self.model)
+        # attach slices onto tensor.main_grad
+        for param, info in self._param_info.items():
+            param.main_grad = info["fp32_buffer"]()[info["range"]].view(param.shape)
+
+    @abstractmethod
+    def to_device(self, device, non_blocking=False):
+        """Move optimizer state to device"""
+        pass
+
+    def _cpu_offload(self):
+        self.zero_grad()
+        self.to_device("cpu")
+
+    def _cpu_backload(self):
+        self.to_device("cuda")
 
     def _custom_allreduce(self, tag, group, op) -> None:
         grads = []
@@ -190,8 +222,7 @@ class GradientManager(ABC):
 
         return grads_for_norm
 
-    @staticmethod
-    def _add_grad_acc_hooks(model: torch.nn.Module):
+    def _add_grad_acc_hooks(self, model: torch.nn.Module):
         def _make_param_hook(param):
             """Create the all-reduce hook for backprop."""
 
@@ -208,7 +239,6 @@ class GradientManager(ABC):
 
         # Backward hook.
         # Accumalation function for the gradients.
-        grad_accs = []
         # Loop over all the parameters in the model.
         for param in model.parameters():
             if param.requires_grad:
@@ -216,6 +246,10 @@ class GradientManager(ABC):
                 param_tmp = param.expand_as(param)
                 # Get the gradient accumulator functtion.
                 grad_acc = param_tmp.grad_fn.next_functions[0][0]
-                grad_acc.register_hook(_make_param_hook(param))
-                grad_accs.append(grad_acc)
-        return grad_accs
+                handle = grad_acc.register_hook(_make_param_hook(param))
+                self._grad_acc_hook_handles.append((handle, grad_acc))
+
+    def _release_grad_acc_hooks(self):
+        for handle, _ in self._grad_acc_hook_handles:
+            handle.remove()
+        self._grad_acc_hook_handles.clear()

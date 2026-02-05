@@ -1,6 +1,9 @@
 # Copyright (c) 2026, STEPFUN CORPORATION. All rights reserved.
 from __future__ import annotations
 
+import gc
+from typing import Optional, Tuple
+
 import torch
 
 from steptronoss.core import tensor_parallel
@@ -83,6 +86,11 @@ class Zero1GradientManager(GradientManager):
         self._gather_model_params()
         return True, grad_norm, num_zeros_in_grad
 
+    def reload_model_params(self):
+        # Only needed for the float16 params.
+        for fp16_param, fp32_param in zip(self.fp16_params, self.fp16_params_in_fp32):
+            fp32_param.data.copy_(fp16_param.data)
+
     @staticmethod
     def replace_optimizer_with_fp32_shards(
         optimizer: torch.optim.Optimizer,
@@ -126,6 +134,31 @@ class Zero1GradientManager(GradientManager):
         optimizer.load_state_dict(optimizer.state_dict())
 
         return fp32_params, fp16_params, fp16_params_in_fp32
+
+    def to_device(self, device, non_blocking=False):
+        for state in self.optimizer.state.values():
+            state["exp_avg"] = state["exp_avg"].to(device, non_blocking=non_blocking)
+            state["exp_avg_sq"] = state["exp_avg_sq"].to(device, non_blocking=non_blocking)
+
+        new_fp16_params_in_fp32 = []
+        for param_group in self.optimizer.param_groups:
+            param_group: dict[str, list[SteptronParameter]]
+            # For all the parameters in this group:
+            for i, param in enumerate(param_group["params"]):
+                # bfloat16 params
+                new_param = param.to(device, non_blocking=non_blocking)
+                if param in self.fp16_params_in_fp32:
+                    new_fp16_params_in_fp32.append(new_param)
+                param_group["params"][i] = new_param
+                if param in self.optimizer.state:
+                    self.optimizer.state[new_param] = self.optimizer.state.pop(param)
+
+        assert len(new_fp16_params_in_fp32) == len(self.fp16_params_in_fp32)
+        self.fp16_params_in_fp32 = new_fp16_params_in_fp32
+
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        gc.collect()
 
     @torch.no_grad()
     def _reduce_model_grads(self):

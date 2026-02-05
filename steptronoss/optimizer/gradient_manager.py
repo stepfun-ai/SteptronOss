@@ -1,5 +1,8 @@
 # Copyright (c) 2026, STEPFUN CORPORATION. All rights reserved.
 
+import copy
+import gc
+from typing import Optional, Tuple
 
 import torch
 
@@ -8,6 +11,7 @@ from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import GradientManagerConfig
 from steptronoss.model.utils.comm_buffer import SteptronParameter
 from steptronoss.timers import get_timers
+from steptronoss.utils import recur_to
 
 from .base_gradient_manager import GradientManager, _zero_grad_group_helper
 
@@ -119,6 +123,31 @@ class AccInFP32GradientManager(GradientManager):
                         f"Received dtype={param.dtype}, device={param.device}"
                     )
         return fp32_params, fp16_params, fp16_params_in_fp32
+
+    def to_device(self, device, non_blocking=False):
+        for state in self.optimizer.state.values():
+            state["exp_avg"] = state["exp_avg"].to(device, non_blocking=non_blocking)
+            state["exp_avg_sq"] = state["exp_avg_sq"].to(device, non_blocking=non_blocking)
+
+        new_fp16_params_in_fp32 = []
+        for param_group in self.optimizer.param_groups:
+            param_group: dict[str, list[SteptronParameter]]
+            # For all the parameters in this group:
+            for i, param in enumerate(param_group["params"]):
+                # bfloat16 params
+                new_param = param.to(device, non_blocking=non_blocking)
+                if param in self.fp16_params_in_fp32:
+                    new_fp16_params_in_fp32.append(new_param)
+                param_group["params"][i] = new_param
+                if param in self.optimizer.state:
+                    self.optimizer.state[new_param] = self.optimizer.state.pop(param)
+
+        assert len(new_fp16_params_in_fp32) == len(self.fp16_params_in_fp32)
+        self.fp16_params_in_fp32 = new_fp16_params_in_fp32
+
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        gc.collect()
 
     @torch.no_grad()
     def _reduce_model_grads(self):

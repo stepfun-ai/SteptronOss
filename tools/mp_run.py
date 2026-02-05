@@ -18,7 +18,9 @@ def submit_one(command: str, envs: dict[str, str]):
     worker = Popen(command, shell=True, env=os.environ | envs, preexec_fn=os.setsid)
 
     def send_signal(sig):
-        os.killpg(os.getpgid(worker.pid), sig)
+        worker.poll()
+        if worker.returncode is None:
+            os.killpg(os.getpgid(worker.pid), sig)
 
     worker.send_signal = send_signal
 
