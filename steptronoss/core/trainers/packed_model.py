@@ -117,11 +117,10 @@ class PackedModel:
         if self._offloaded["params"]:
             return
         self._offloaded["params"] = True
-
+        if self.training:
+            self.grad_manager._release_grad_acc_hooks()
         for m in self.models:
             m.to(device="cpu", non_blocking=non_blocking)
-        if self.training:  # detach grad acc hooks from
-            self.grad_manager._release_grad_acc_hooks()
 
     def _backload_param(self, non_blocking=True):
         if not self._offloaded["params"]:
@@ -129,9 +128,9 @@ class PackedModel:
         self._offloaded["params"] = False
         for m in self.models:
             m.to(device=torch.cuda.current_device(), non_blocking=non_blocking)
-            if self.training:
-                # re-register grad-acc hook
-                self.grad_manager._add_grad_acc_hooks(self.models)
+        if self.training:
+            # re-register grad-acc hooks once after params are back on GPU
+            self.grad_manager._add_grad_acc_hooks(self.models)
 
     def _offload_grad_buffer(self):
         if self._offloaded["grad_buffer"]:
