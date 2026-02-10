@@ -91,7 +91,7 @@ class SimpleTrainable(TrainableItem):
         is_gen_mask = [0] * len(prompt_ids) + [1] * len(decode_ids)
         stop_type = StopType.MAX_LEN if finish_reason == "length" else StopType.STOP_STRING
 
-        logger.info(f"New Traj Generated! boxed={predicted!r} gt={self.gt!r} correct={is_correct}")
+        # logger.info(f"New Traj Generated! boxed={predicted!r} gt={self.gt!r} correct={is_correct}")
         return [
             EnvTrajectory(
                 trajectory=trajectory,

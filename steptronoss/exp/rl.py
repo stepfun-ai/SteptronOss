@@ -20,13 +20,6 @@ from steptronoss.exp.base_exp import (
 from steptronoss.exp.checkpointing import CheckpointConfig, LoadOptions, SaveOptions
 from steptronoss.exp.lr_schedulers import SchedulerConfig
 from steptronoss.generation.vllm.vllm_controller import VLLMDeployConfig
-
-# from steptronoss.exp.inference import (
-#     GenerationOutput,
-#     InferencableModelConfig,
-#     RolloutManagerConfig,
-#     StopType,
-# )
 from steptronoss.utils.metrics import (
     AvgMetric,
     GlobalMetrics,
