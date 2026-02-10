@@ -1,21 +1,17 @@
 from abc import abstractmethod
+from os.path import join
 from typing import Any
+
+import aiohttp
 from configurize import DataClass
 
-from steptronoss.exp.inference import StopType
-from steptronoss.exp.rl import EnvTrajectory
+from steptronoss.exp.rl import EnvTrajectory, StopType
 from steptronoss.utils import get_exp_id
-import aiohttp
-from os.path import join
 
 # Abstract
 
 
 class GenableItem(DataClass):
-
-    sampling_params: dict = {}
-    # Prompt specific sampling params, if empty, use inference_config.
-
     meta: dict = {}
 
     @abstractmethod
@@ -62,8 +58,8 @@ class SingleTurnPrompt(OpenAITrainableItem):
             timeout=aiohttp.ClientTimeout(total=7200.0),
         ) as response:
             response = await response.json()
-            decode_ids: list[int] = response['choices'][0]['model_extra']["token_ids"]
-            finish_reason = response['choices'][0]['finish_reason']
+            decode_ids: list[int] = response["choices"][0]["model_extra"]["token_ids"]
+            finish_reason = response["choices"][0]["finish_reason"]
 
         return dict(
             prompt=self.prompt,

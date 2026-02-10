@@ -2,12 +2,12 @@ import asyncio
 import multiprocessing as mp
 import threading
 import time
-from tqdm import tqdm
 from queue import Empty, Queue
 from typing import Any, Callable, Iterable, NoReturn, Optional
 from uuid import uuid4
 
 from loguru import logger
+from tqdm import tqdm
 
 from steptronoss.exp.rl import EnvTrajectory
 from steptronoss.generation.base_generatable import TrainableItem
@@ -61,8 +61,6 @@ class SingleGenerationController:
         if callback is None:
             callback = print
         if task_meta:
-            if not hasattr(genable, "meta") or genable.meta is None:
-                genable.meta = {}
             genable.meta.update(task_meta)
         # genable.meta["async_gen_callback"] = callback
         self.input_queue.put((genable, callback, for_train))
@@ -78,9 +76,7 @@ class SingleGenerationController:
                     break
 
             if tasks:
-                done, pending = await asyncio.wait(
-                    tasks, return_when=asyncio.FIRST_COMPLETED
-                )
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     await task
                 tasks = list(pending)
@@ -109,9 +105,7 @@ def _generation_worker_process(input_queue: mp.Queue, result_queue: mp.Queue) ->
             worker.submit_with_callback(
                 item,
                 for_train=for_train,
-                callback=lambda x, r, q=result_queue: q.put(
-                    (x.meta.pop("_gc_task_id"), x, r)
-                ),
+                callback=lambda x, r, q=result_queue: q.put((x.meta.pop("_gc_task_id"), x, r)),
             )
         except Exception as e:
             logger.error(f"Worker process error: {e}")
@@ -177,24 +171,16 @@ class GenerationController:
         genable: TrainableItem,
         for_train: bool = False,
         callback: Optional[Callable[[tuple[TrainableItem, Any]], NoReturn]] = None,
-        task_id: Optional[int] = None,
-        task_meta: Optional[dict] = None,
     ) -> NoReturn:
         """提交单个任务（支持自定义回调）"""
         if callback is None:
             callback = print
 
-        # 生成唯一任务ID（如果未提供）
-        if task_id is None:
-            task_id = str(uuid4())
+        # 生成唯一任务ID
+        task_id = str(uuid4())
 
         # 保存回调函数（将在主线程执行）
         self.callback_map[task_id] = callback
-
-        if task_meta:
-            if not hasattr(genable, "meta") or genable.meta is None:
-                genable.meta = {}
-            genable.meta.update(task_meta)
 
         # 将任务发送给工作进程
         self.input_queue.put((genable, task_id, for_train))

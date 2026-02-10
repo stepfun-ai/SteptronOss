@@ -153,7 +153,7 @@ class FWBWScheduler:
 
         self.training = training
 
-    @timeit("batch-generator", log_level=2)
+    @timeit("batch-generator", level=2)
     def _prefetch_iteration_data(self, forward_num: int):
         """在每个iteration开始时预取本轮需要的全部数据，避免在forward_chunk里逐个取。"""
         # 记录当前vp rank，预取完再恢复，避免影响后续逻辑

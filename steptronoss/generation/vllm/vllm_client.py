@@ -107,10 +107,13 @@ class VLLMClient:
 
     def wait_for_server(self, timeout: int = 3600) -> list[str]:
         """Wait till all vLLM servers ready or timeout; return endpoints list."""
+        exp_redis = get_exp_redis()
+        expected_replica = block_get_redis(exp_redis, f"VLLM_NUM_WORKERS_OF_{self.cfg.model_name}")
+        expected_replica = int(expected_replica)
+
         start_time = time.time()
         while time.time() - start_time < timeout:
             endpoints = self.get(f"{self._router_addr}/get_info")
-            expected_replica = self.cfg.resource_cfg.replica
             endpoint_addrs = [ep["endpoint"] for ep in endpoints]
             if self.check_server_alive() and len(endpoints) >= expected_replica:
                 logger.info(f"[wait_for_server] All {len(endpoint_addrs)} endpoints ready: {endpoint_addrs}")

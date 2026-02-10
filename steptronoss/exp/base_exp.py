@@ -97,7 +97,9 @@ class MetricConfig(AbstractMetricConfig):
 
 
 class TrainerConfig(AbstractTrainerConfig):
-    train_iters: int | None = None
+    micro_batch_size: int = 1
+
+    train_iters: Optional[int] = None
 
     offload_optimizer_state: bool = False
 
@@ -391,7 +393,7 @@ class MegatronTPConfig(AbstractModelConfig):
 
     sequence_parallel: bool = False
 
-    gradient_accumulation_fusion: bool = True
+    gradient_accumulation_fusion: bool = False
     async_tensor_model_parallel_allreduce: bool = True
 
     distribute_saved_activations: bool = False

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from configurize import Config, Ref
+from loguru import logger
 
 from steptronoss.core import tensor_parallel
 from steptronoss.exp.base_exp import MegatronTPConfig
@@ -107,3 +108,59 @@ class OutputEmbedding(torch.nn.Module):
         hidden_states = self.norm(hidden_states)
         output = self.output(hidden_states)[0]
         return output
+
+
+class OneDimensionalOutputEmbedding(torch.nn.Module):
+    def __init__(self, cfg: OutputEmbeddingConfig):
+        super().__init__()
+        self.sequence_parallel = cfg.tp_cfg.sequence_parallel
+
+        self.norm = RMSNorm(
+            cfg.hidden_size,
+            eps=cfg.layernorm_epsilon,
+            sequence_parallel=cfg.tp_cfg.sequence_parallel,
+            use_fp32=cfg.fp32_rms_norm,
+        )
+        kwargs = cfg.tp_cfg.get_tp_kwargs()
+        kwargs["sequence_parallel_enabled"] = False
+        self.output = tensor_parallel.RowParallelLinear(
+            cfg.hidden_size,
+            output_size=1,
+            bias=False,
+            input_is_parallel=False,
+            **kwargs,
+        )
+
+    def forward(self, hidden_states, **kwargs):
+        hidden_states = self.norm(hidden_states)
+        if self.sequence_parallel:
+            hidden_states = tensor_parallel.gather_from_sequence_parallel_region(hidden_states)
+        output = self.output(hidden_states)[0]
+        return output
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        loaded_key = prefix + "output.weight"
+        loaded_weight = state_dict[loaded_key]
+        if loaded_weight.shape != self.output.weight.shape:
+            logger.warning(f"Output layer weight mismatch: {loaded_weight.shape} vs {self.output.weight.shape}")
+            state_dict.pop(loaded_key)
+
+            logger.info("Skip `out_embeddings.output.weight` from pretrained weights")
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )

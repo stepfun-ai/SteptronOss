@@ -157,7 +157,6 @@ class GradientManager(ABC):
         pass
 
     def _cpu_offload(self):
-        self.zero_grad()
         self.to_device("cpu")
 
     def _cpu_backload(self):

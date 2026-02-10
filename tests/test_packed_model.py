@@ -158,6 +158,42 @@ def test_packed_model_offload_backload_buffers(dist_and_mesh, use_distributed_op
 
 
 @pytest.mark.parametrize("use_distributed_optimizer", [False, True])
+def test_packed_model_offload_keep_grad(dist_and_mesh, use_distributed_optimizer):
+    torch.manual_seed(0)
+    packed_a = _build_packed_model(use_distributed_optimizer)
+    packed_b = _build_packed_model(use_distributed_optimizer)
+
+    packed_b.models[0].load_state_dict(packed_a.models[0].state_dict())
+    packed_b.grad_manager.reload_model_params()
+
+    x = torch.randn(2, 1000, device="cuda")
+    y = torch.randn(2, 1000, device="cuda")
+
+    def fwbw(packed, x, y):
+        out = packed.models[0](x)
+        loss = torch.nn.functional.mse_loss(out, y)
+        loss.backward()
+
+    fwbw(packed_a, x, y)
+    fwbw(packed_b, x, y)
+
+    packed_b._offload_optimizer_state()
+    packed_b._backload_optimizer_state()
+
+    weight_a_before = packed_a.models[0].module.weight.detach().clone()
+    weight_b_before = packed_b.models[0].module.weight.detach().clone()
+
+    fwbw(packed_a, x, y)
+    fwbw(packed_b, x, y)
+    packed_a.optimizer_step()
+    packed_b.optimizer_step()
+
+    assert not torch.allclose(packed_a.models[0].module.weight, weight_a_before)
+    assert not torch.allclose(packed_b.models[0].module.weight, weight_b_before)
+    assert torch.allclose(packed_a.models[0].module.weight, packed_b.models[0].module.weight, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize("use_distributed_optimizer", [False, True])
 def test_packed_model_offload_backload_preserves_step(dist_and_mesh, use_distributed_optimizer):
     torch.manual_seed(0)
     packed_a = _build_packed_model(use_distributed_optimizer)

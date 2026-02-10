@@ -26,20 +26,9 @@ class BaseInferenceConfig(Config):
     """shuffle all generated samples after finish generation."""
 
 
-class VLLMDeployResourceConfig(Config):
-    cpu: int = 32
-    gpu: int = 4
-    mem_gb: int = 80
-    image: str = None
-    replica: int = 1
-
-    envs: dict = {}
-
-
 class VLLMDeployConfig(BaseInferenceConfig):
     """Config you need to deploy a vllm server."""
 
-    resource_cfg: VLLMDeployResourceConfig = VLLMDeployResourceConfig
     router_addr_key: str = "default"
     """Key in exp redis that stores router addr & port."""
 
@@ -113,17 +102,6 @@ class VLLMDeployConfig(BaseInferenceConfig):
         if self.enable_auto_tool_choice:
             assert self.toolcall_parser
 
-        # Validate that GPU count is evenly divisible by inference_tp
-        assert self.resource_cfg.gpu % (self.vllm_tp * self.vllm_dp) == 0, (
-            f"resource_cfg.gpu ({self.resource_cfg.gpu}) must be evenly divisible by "
-            f"inference_tp ({self.vllm_tp}) * vllm_data_parallel_size ({self.vllm_dp}). "
-            f"Current: {self.resource_cfg.gpu} % ({self.vllm_tp}*{self.vllm_dp}) = "
-            f"{self.resource_cfg.gpu % (self.vllm_tp * self.vllm_dp)} (should be 0). "
-            f"This ensures each mp_run process gets equal GPUs. "
-            f"Valid inference_tp values for {self.resource_cfg.gpu} GPUs: "
-            f"{[i for i in range(1, self.resource_cfg.gpu + 1) if self.resource_cfg.gpu % i == 0]}"
-        )
-
     def run_as_worker(self):
         """Run a vllm controller that deploy a vllm server and register it to exp-router."""
         from steptronoss.generation.vllm.vllm_controller import VLLMController
@@ -141,7 +119,7 @@ class VLLMDeployConfig(BaseInferenceConfig):
 
         import json
 
-        envs = self.resource_cfg.envs.copy()
+        envs = {}
 
         cmd = [
             f"vllm serve",
@@ -236,3 +214,23 @@ class VLLMDeployConfig(BaseInferenceConfig):
         sampling_params.update(self.vllm_sampling_params)
         sampling_params.update(override_params)
         return sampling_params
+
+    def deploy_training_model(self, models: list[torch.nn.Module]):
+
+        from steptronoss.checkpointing.hf_checkpoint import dump_safetensors
+        from steptronoss.core.parallel_state import PM
+
+        cli = self.build_cli()
+
+        dump_safetensors(
+            save_path=self.hot_path,
+            model_reference_path=self.model_config_path,
+            tokenizer_reference_path=self.tokenizer_path,
+            models=models,
+        )
+
+        if PM.world_rank == 0:
+            cli.wait_for_server()
+            cli.reload_weights(self.hot_path)
+
+        cli.wait_for_server()

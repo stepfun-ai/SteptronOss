@@ -133,6 +133,7 @@ class PackedModel:
             self.grad_manager._add_grad_acc_hooks(self.models)
 
     def _offload_grad_buffer(self):
+        """WARNING: this also zero grads"""
         if self._offloaded["grad_buffer"]:
             return
         if not self.training:
@@ -179,8 +180,8 @@ class PackedModel:
     def offload_state(self):
         if self.training:
             with get_timers().record(f"{self.name}_offload_state", log_level=1):
-                self._offload_grad_buffer(non_blocking=True)
-                self._offload_optimizer_state(non_blocking=True)
+                self._offload_grad_buffer()
+                self._offload_optimizer_state()
 
     def backload_model(self):
         with get_timers().record(f"{self.name}_backload_model", log_level=1):
@@ -189,8 +190,8 @@ class PackedModel:
     def backload_state(self):
         if self.training:
             with get_timers().record(f"{self.name}_backload_state", log_level=1):
-                self._backload_grad_buffer(non_blocking=True)
-                self._backload_optimizer_state(non_blocking=True)
+                self._backload_grad_buffer()
+                self._backload_optimizer_state()
 
     @contextmanager
     def on_gpu(self, model=True, optimizer=True):
@@ -269,11 +270,7 @@ class PackedModel:
             if zero_grad:
                 self.grad_manager.zero_grad()
             if offload_opt_while_forward:
-                self._offload_optimizer_state(
-                    momentum_only=offload_opt_while_forward == "momentum",
-                    zero_grad=False,
-                    non_blocking=non_blocking_offload,
-                )
+                self._offload_optimizer_state()
 
         if data_list:
             forward_num = len(data_list)
@@ -303,8 +300,5 @@ class PackedModel:
             outputs = pp_scheduler.run(forward_num)
 
         if training and offload_opt_while_forward:
-            self._backload_optimizer_state(
-                momentum_only=offload_opt_while_forward == "momentum",
-                non_blocking=non_blocking_offload,
-            )
+            self._backload_optimizer_state()
         return outputs

@@ -6,5 +6,6 @@
 from .dist_utils import *
 from .general import *
 from .logger import *
+from .memory_tracker import *
 from .metrics import *
 from .utils import *

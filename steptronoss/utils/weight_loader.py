@@ -187,6 +187,48 @@ class Cat:
 
 
 class HFWeights(dict):
+    """Dictionary-like loader for HuggingFace safetensors weights.
+
+    This class reads a HF-style safetensors checkpoint directory and exposes the
+    tensors as a plain ``dict`` keyed by parameter name.
+
+    The resulting object behaves like a standard ``dict[str, torch.Tensor]`` and
+    is intended as a lightweight bridge between HF checkpoints and StepTron
+    tooling. Two convenience methods are provided:
+
+    - ``export(...)``: remap and optionally reshape/merge tensors using the
+      indicator DSL (``Is`` and ``Cat``) used by this module. This is commonly
+      used to rename keys, slice tensors by parallel rank, and concatenate
+      components (e.g., merging Q/K/V projections).
+    - ``write_safetensors_to(...)``: write the current mapping back to a
+      safetensors directory, automatically sharding to a maximum file size and
+      producing a HF-compatible ``model.safetensors.index.json``.
+
+    Examples:
+        Load and access tensors:
+
+        ```python
+        weights = HFWeights("/path/to/hf/ckpt")
+        wq = weights["model.layers.0.self_attn.q_proj.weight"]
+        ```
+
+        Remap and merge Q/K/V into a single tensor:
+
+        ```python
+        indicator = [
+            "model.*: transformer.model.*",
+            "*wqkv_proj* CAT(0) *q_proj* *k_proj* *v_proj*",
+        ]
+        state = weights.export(indicator)
+        ```
+
+        Write out to a new safetensors directory:
+
+        ```python
+        weights.write_safetensors_to("/tmp/out", shard_max_size=5e9)
+        ```
+    """
+
     def __init__(self, path: str):
         import json
         from os.path import exists, join

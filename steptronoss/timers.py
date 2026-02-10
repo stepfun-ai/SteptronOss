@@ -285,13 +285,13 @@ class timeit(_DecoratorContextManager):
     def __init__(
         self,
         name=None,
-        log_level=None,
+        level=None,
         barrier=False,
         sync_device=False,
         use_event=False,
     ) -> None:
         self.name = name
-        self.log_level = log_level
+        self.log_level = level
         self.barrier = barrier
         self.sync_device = sync_device
         self.use_event = use_event

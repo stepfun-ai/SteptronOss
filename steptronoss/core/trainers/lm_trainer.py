@@ -7,7 +7,7 @@ import megfile
 import torch
 from loguru import logger
 
-from steptronoss.checkpointing.local_checkpoint import dump_ckpt, load_ckpt
+from steptronoss.checkpointing.local_checkpoint import Checkpointer
 from steptronoss.core import parallel_state as mpu
 from steptronoss.core import tensor_parallel
 from steptronoss.core.parallel_state import PM, get_vpp_size, set_vpp_rank
@@ -39,8 +39,7 @@ class DecoderPretrainTrainer(BaseTrainer):
 
     def __init__(self, exp: PretrainExp):
         self.exp = exp
-
-        self.uploading_threads = []
+        self.checkpointer = Checkpointer()
 
         self.history = dict(
             consumed_samples=0,
@@ -135,7 +134,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         if self.exp.checkpoint_cfg.save_path and self.iteration != 0:
             # Do not use async dump since training is done.
             with self.exp.checkpoint_cfg.modify(async_dump=False):
-                self.save_checkpoint(path=os.path.join(self.exp.checkpoint_cfg.save_path, f"it{self.iteration}"))
+                self.save_checkpoint()
 
         for hook in self._after_train_hooks:
             hook(self)
@@ -172,7 +171,7 @@ class DecoderPretrainTrainer(BaseTrainer):
                 and self.iteration % self.exp.checkpoint_cfg.save_interval == 0
                 and self.iteration > self.start_iteration
             ):
-                self.save_checkpoint(path=os.path.join(self.exp.checkpoint_cfg.save_path, f"it{self.iteration}"))
+                self.save_checkpoint()
             # empty cache after first run to clean all init buffers
             # this reduces peak memory usage
             if self.iteration == self.start_iteration:
@@ -433,7 +432,8 @@ class DecoderPretrainTrainer(BaseTrainer):
     def load_checkpoint(self):
         cfg = self.exp.checkpoint_cfg
 
-        state_dicts, extra = load_ckpt(cfg.load_path, cfg)
+        state_dicts = self.checkpointer.load_ckpt(cfg.load_path, cfg)
+        extra = state_dicts.get("extra_info", {})
         if cfg.load_option.exp and "exp" in extra:
             self.exp.assert_critical_attrs_expected(extra)
 
@@ -441,41 +441,21 @@ class DecoderPretrainTrainer(BaseTrainer):
 
         return state_dicts
 
-    def join_dumping_thread(self):
-        """ensure all dumping threads are finished"""
-        dumping_flag = torch.tensor(0, device=torch.cuda.current_device())
-        working_threads = [x for x in self.uploading_threads if x is not None]
-        if working_threads:  # An uploader exists
-            for thread in working_threads:
-                if thread.is_alive():
-                    dumping_flag += 1
-        torch.distributed.all_reduce(dumping_flag)
+    def save_checkpoint(self):
 
-        if dumping_flag > 0:
-            logger.warning("Last uploading not finished. Consider increasing your save_interval!")
-            if working_threads:
-                for t in working_threads:
-                    t.join()
-        self.uploading_threads = []
-
-    def save_checkpoint(self, path):
-
-        self.join_dumping_thread()
+        self.checkpointer.join_dumping_thread()
 
         sync_point("ready for dump")
         # Now dump
 
-        self.uploading_threads.append(
-            dump_ckpt(
-                path,
-                cfg=self.exp.checkpoint_cfg,
-                iteration=self.iteration,
-                model=self.models,
-                optimizer=self.grad_manager,
-                opt_param_scheduler=self.opt_param_scheduler,
-                dataloader=self.train_data_iterators[0],
-                extra_info={"exp": self.exp.to_dict(), "history": self.history},
-            )
+        self.checkpointer.dump_ckpt(
+            cfg=self.exp.checkpoint_cfg,
+            iteration=self.iteration,
+            model=self.models,
+            optimizer=self.grad_manager,
+            opt_param_scheduler=self.opt_param_scheduler,
+            dataloader=self.train_data_iterators[0],
+            extra_info={"exp": self.exp.to_dict(), "history": self.history},
         )
 
     def __repr__(self):

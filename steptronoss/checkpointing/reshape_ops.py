@@ -649,6 +649,8 @@ class OnlineReshaper(ReshapeOp):
         output = {}
         for script_piece in self.scripts:
             raw_piece = self.get_piece_by_pattern(weights, script_piece.src)
+            if not raw_piece:
+                continue  # skip not-exist keys
 
             new_piece = script_piece.op.forward(raw_piece)
 
@@ -663,6 +665,8 @@ class OnlineReshaper(ReshapeOp):
         output = {}
         for script_piece in self.scripts:
             raw_piece = self.get_piece_by_pattern(weights, script_piece.dst)
+            if not raw_piece:
+                continue  # skip not-exist keys
 
             new_piece = script_piece.op.backward(raw_piece)
 
