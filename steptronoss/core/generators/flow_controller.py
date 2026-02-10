@@ -49,7 +49,7 @@ class SimpleFlowController(FlowController):
         assert self.cfg.async_strategy in ["on-policy", "one-step-off"]
 
         self.infer_weight_version = -1
-        self.train_weight_version = 0
+        self.train_weight_version = -1
 
         self.yielded_but_not_acked_train_samples = []
 
@@ -162,6 +162,7 @@ class SimpleFlowController(FlowController):
 
     def get_train_samples(self) -> list[EnvTrajectory]:
         """Get samples for single train iter, return of this function is also a train trigger."""
+        self.train_weight_version += 1
         self.sync_weight()
         trajectories = []
         if PM.world_rank == 0:
@@ -219,8 +220,8 @@ class FullyAsyncFlowController(FlowController):
         self.cfg = flow_cfg
         self.vllm_cfg = vllm_cfg
 
-        self.infer_weight_version = 0
-        self.train_weight_version = 0
+        self.infer_weight_version = -1
+        self.train_weight_version = -1
 
         self.yielded_but_not_acked_train_samples = []
 
@@ -312,6 +313,7 @@ class FullyAsyncFlowController(FlowController):
 
     def get_train_samples(self) -> list[EnvTrajectory]:
         """Get samples for single train iter, return of this function is also a train trigger."""
+        self.train_weight_version += 1
         self.sync_weight()
         trajectories = []
         while True:

@@ -112,7 +112,7 @@ class TrainerConfig(AbstractTrainerConfig):
 
     log_num_zeros_in_grad: bool = True
 
-    log_interval: int = 10
+    log_interval: int = 1
 
     # writer_backend: available backends are "tensorboard", "wandb"
     # support multiple backends

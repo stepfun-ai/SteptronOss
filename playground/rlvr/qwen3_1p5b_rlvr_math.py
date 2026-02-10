@@ -1,17 +1,14 @@
-import json
 import os
-import random
-import re
 from typing import Any
 
 import torch
 from configurize import Ref
-from loguru import logger
 
 from playground.pretrain.qwen3.qwen3_1p7b import (
     Qwen3_1p7BConfig,
     Qwen3OutputEmbeddingConfig,
 )
+from playground.rlvr.simple_trainable import SimpleTrainable
 from steptronoss.core.context_parallel.context_parallel import (
     gather_from_balanced_cp_region,
     scatter_to_balanced_cp_region,
@@ -32,117 +29,44 @@ from steptronoss.exp.resources import ResourceConfig, TaskSpec
 from steptronoss.exp.rl import (
     ActorModelConfig,
     CriticModelConfig,
-    EnvTrajectory,
     PackedPPOSamples,
     PPOCheckpointCfg,
     PPOLikeExp,
     PPOLikeTrainerConfig,
     PPOMetricConfig,
-    StopType,
 )
-from steptronoss.generation.base_generatable import TrainableItem
 from steptronoss.generation.vllm.vllm_router import VLLMRouterConfig
+from steptronoss.utils.metrics import GlobalMetrics
 from steptronoss.utils.rl_utils import compute_gae
-from steptronoss.utils.utils import get_exp_id
-
-
-class FakeTrainable(TrainableItem):
-    prompt_text: str = "strawberry里有几个r"
-    """Fixed prompt for rollout."""
-
-    correct_answer: str = "3"
-    """Expected correct answer string."""
-
-    max_tokens: int = 1024
-    """Max decode tokens from vLLM."""
-
-    _tokenizer = None
-    _router_addr: str | None = None
-
-    @classmethod
-    def _get_tokenizer(cls):
-        if cls._tokenizer is None:
-            from transformers import AutoTokenizer
-
-            cls._tokenizer = AutoTokenizer.from_pretrained(Qwen3TokenizerConfig.tokenizer_path, trust_remote_code=True)
-        return cls._tokenizer
-
-    @classmethod
-    def _get_router_addr(cls, router_addr_key: str) -> str:
-        if cls._router_addr is None:
-            from steptronoss.utils.comm_utils import block_get_redis, get_exp_redis
-
-            exp_redis = get_exp_redis()
-            redis_key = f"VLLM_ROUTER_ADDR_PORT_{router_addr_key}"
-            cls._router_addr = f"http://{block_get_redis(exp_redis, redis_key).decode()}"
-        return cls._router_addr
-
-    @staticmethod
-    def _is_correct(answer: str) -> bool:
-        normalized = answer.strip()
-        if not normalized:
-            return False
-        if "3" in normalized:
-            return True
-        if "三个" in normalized or "三 个" in normalized:
-            return True
-        return False
-
-    async def generate_for_train(self):
-        import aiohttp
-
-        tokenizer = self._get_tokenizer()
-        prompt_ids = tokenizer.encode(self.prompt_text, add_special_tokens=False)
-
-        vllm_cfg = TinyRLVRVLLMDeployConfig()
-        payload = {
-            "model": vllm_cfg.model_name,
-            "prompt": prompt_ids,
-            "return_token_ids": True,
-        }
-        payload.update(vllm_cfg.get_sampling_params({"max_tokens": self.max_tokens}))
-
-        router_addr = self._get_router_addr(vllm_cfg.router_addr_key)
-        async with aiohttp.request(
-            method="POST",
-            url=f"{router_addr}/v1/completions",
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=7200.0),
-        ) as response:
-            response = await response.json()
-
-        choice = response["choices"][0]
-        decode_ids = choice.get("model_extra", {}).get("token_ids")
-        if decode_ids is None:
-            decode_text = choice.get("text", "")
-            decode_ids = tokenizer.encode(decode_text, add_special_tokens=False)
-        finish_reason = choice.get("finish_reason", "")
-
-        decoded_text = choice.get("text")
-        if decoded_text is None:
-            decoded_text = tokenizer.decode(decode_ids, skip_special_tokens=True)
-
-        is_correct = self._is_correct(decoded_text)
-        raw_reward = 3.0 if is_correct else 0.0
-
-        trajectory = prompt_ids + decode_ids
-        is_gen_mask = [0] * len(prompt_ids) + [1] * len(decode_ids)
-        stop_type = StopType.MAX_LEN if finish_reason == "length" else StopType.STOP_STRING
-
-        logger.info(f"New Traj Generated! answer={decoded_text!r} correct={is_correct}")
-        return [
-            EnvTrajectory(
-                trajectory=trajectory,
-                is_gen_mask=is_gen_mask,
-                raw_reward=raw_reward,
-                stop_type=stop_type,
-            )
-        ]
 
 
 class FakeGenableGenerator(Nextable):
+    def __init__(
+        self,
+        endpoint: str,
+        model_name_template: str,
+        sampling_params: dict[str, Any],
+        prompt_text: str,
+        gt: str,
+        max_tokens: int,
+    ):
+        super().__init__()
+        self.endpoint = endpoint
+        self.model_name_template = model_name_template
+        self.sampling_params = sampling_params
+        self.prompt_text = prompt_text
+        self.gt = gt
+        self.max_tokens = max_tokens
+
     def __next__(self) -> dict[str, Any]:
-        return FakeTrainable()
+        return SimpleTrainable(
+            endpoint=self.endpoint,
+            model_name_template=self.model_name_template,
+            sampling_params=self.sampling_params,
+            prompt_text=self.prompt_text,
+            gt=self.gt,
+            max_tokens=self.max_tokens,
+        )
 
     def state_dict(self) -> dict[str, Any]:
         pass
@@ -159,7 +83,22 @@ class MathPromptDataConfig(DataConfig):
     seed: int = 1234
 
     def build_dataloader(self, dp_rank=0, dp_size=1):
-        return FakeGenableGenerator()
+        from steptronoss.utils.comm_utils import block_get_redis, get_exp_redis
+
+        vllm_cfg = TinyRLVRVLLMDeployConfig()
+        exp_redis = get_exp_redis()
+        redis_key = f"VLLM_ROUTER_ADDR_PORT_{vllm_cfg.router_addr_key}"
+        endpoint = f"http://{block_get_redis(exp_redis, redis_key).decode()}"
+        max_tokens = 1024
+        sampling_params = vllm_cfg.get_sampling_params({"max_tokens": max_tokens})
+        return FakeGenableGenerator(
+            endpoint=endpoint,
+            model_name_template="deployed-model-{EXP_ID}",
+            sampling_params=sampling_params,
+            prompt_text="请回答：strawberry里有几个r？请用 \\boxed{...} 给出最终答案。",
+            gt="3",
+            max_tokens=max_tokens,
+        )
 
 
 class Qwen3TokenizerConfig(TokenizerConfig):
@@ -180,7 +119,7 @@ class TinyRLVRResourceConfig(ResourceConfig):
 
         self.task_specs = {
             "trainer": TaskSpec(
-                envs={"ROLE": "trainer", "CUDA_VISIBLE_DEVICES": "0,1,2,3"},
+                envs={"ROLE": "trainer", "CUDA_VISIBLE_DEVICES": "0,1,2,3", "CUDA_LAUNCH_BLOCKING": "1"},
                 is_critical=True,
                 command="{TORCHRUN} {COMMAND}",
             ),
@@ -195,7 +134,7 @@ class TinyRLVRVLLMDeployConfig(VLLMDeployConfig):
         self.model_config_path = "/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-1.7B/"
         self.max_seq_len = 40960
 
-        self.model_name = f"deployed-model-{get_exp_id()}"
+        self.model_name_template = "deployed-model-{EXP_ID}"
         self.vllm_tp = 4
 
         self.hot_path = "/mnt/shared-storage/tenant/zhy/tmp/"
@@ -318,6 +257,7 @@ class RLVRTrainerConfig(PPOLikeTrainerConfig):
         pg_loss = -torch.min(surrogate1, surrogate2)
         loss = pg_loss.mean()
 
+        kl = None
         if data.ref_logprobs is not None and self.ref_kl_loss_coeff > 0:
             kl = (new_logprobs - data.ref_logprobs).mean()
             loss = loss + self.ref_kl_loss_coeff * kl
@@ -326,6 +266,9 @@ class RLVRTrainerConfig(PPOLikeTrainerConfig):
             kl_old = (new_logprobs - old_logprobs).mean()
             loss = loss + self.sample_kl_loss_coeff * kl_old
 
+        GlobalMetrics.ppo_loss.add(loss, iop=torch.detach)
+        if kl is not None:
+            GlobalMetrics.kl_with_ref_dist.add(kl, iop=torch.detach)
         return loss
 
     def critic_loss_func(self, data: PackedPPOSamples, outputs: torch.Tensor) -> torch.Tensor:
@@ -342,7 +285,9 @@ class RLVRTrainerConfig(PPOLikeTrainerConfig):
         values = values[is_gen_mask].contiguous()
         target = data.returns
         data.values = values.detach()
-        return torch.nn.functional.mse_loss(values, target)
+        loss = torch.nn.functional.mse_loss(values, target)
+        GlobalMetrics.critic_loss.add(loss, iop=torch.detach)
+        return loss
 
 
 class Exp(PPOLikeExp):

@@ -72,7 +72,8 @@ class VLLMDeployConfig(BaseInferenceConfig):
     enable_reasoning: bool = False
     reasoning_parser: str = None  # "deepseek_r1"
 
-    model_name: str = None
+    model_name_template: str = "deployed-model-{EXP_ID}"
+    """Template for model name; EXP_ID is substituted at runtime."""
     hot_path: str = None
 
     vllm_hf_overrides: dict = {}
@@ -108,6 +109,12 @@ class VLLMDeployConfig(BaseInferenceConfig):
 
         controller = VLLMController(cfg=self)
         controller.start()
+
+    @property
+    def model_name(self) -> str:
+        from steptronoss.utils import get_exp_id
+
+        return self.model_name_template.format(EXP_ID=get_exp_id())
 
     def build_cli(self):
         """Build a VLLM client that talks to the exp router."""

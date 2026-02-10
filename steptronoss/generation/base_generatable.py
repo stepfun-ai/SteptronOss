@@ -1,9 +1,8 @@
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from os.path import join
 from typing import Any
 
 import aiohttp
-from configurize import DataClass
 
 from steptronoss.exp.rl import EnvTrajectory, StopType
 from steptronoss.utils import get_exp_id
@@ -11,8 +10,9 @@ from steptronoss.utils import get_exp_id
 # Abstract
 
 
-class GenableItem(DataClass):
-    meta: dict = {}
+class GenableItem(ABC):
+    def __init__(self, meta: dict = None) -> None:
+        self.meta: dict = meta or {}
 
     @abstractmethod
     async def generate(self) -> Any:

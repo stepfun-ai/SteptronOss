@@ -392,10 +392,8 @@ class PPOMetricConfig(MetricConfig):
     advantage_abs_mean = Metric().mean("time").mean("dp")
     """Mean of abs(adventage)."""
 
-    filter_rate_before_reward_fn = Metric().mean("time")
-    """Ratio of filtered samples in before-reward filtering"""
-    filter_rate_after_reward_fn = Metric().mean("time")
-    """Ratio of filtered samples in after-reward filtering"""
+    sample_filter_rate = Metric().mean("time")
+    """Ratio of filtered samples in filtering"""
 
     # Misc Metrics
     ppo_loss = Metric().mean("time").mean("dp")
@@ -556,14 +554,8 @@ class PPOLikeTrainerConfig(TrainerConfig):
     offload_data: bool = False
     """if set, offload data to CPU for memory saving."""
 
-    offload_optimizer_state: str | bool = "momentum"
-    """Offload optimizer when train model, one of [False, True, 'momentum']"""
-
-    dynamic_sampling = False
-    """If True, use dynamic sampling.
-    dynamic sampling will filter out samples that is all correct or all incorrect,
-    and resampling to a fixed number of batch_size.
-    """
+    offload_optimizer_state: bool = False
+    """Offload optimizer when train model, one of [False, True]"""
 
     skip_first_eval: bool = False
     """If True, skip eval at the first iteration"""
@@ -687,26 +679,9 @@ class PPOLikeTrainerConfig(TrainerConfig):
             GlobalMetrics.repeatness_rate_incorrect.add(float(repeatness > 0.2))
             GlobalMetrics.rollout_logprob_incorrect.add(sample.logprobs, iop=torch.mean)
 
-    def filter_after_rewarding(self, samples: list[PPOSample]) -> list[PPOSample]:
-        if not self.dynamic_sampling:
-            filtered_samples = samples
-        else:
-            filtered_samples = []
-            prompt_correctness = defaultdict(list)
-            for sample in samples:
-                if sample.raw_reward >= 0.5:
-                    prompt_correctness[sample.prompt_id].append(1)
-                else:
-                    prompt_correctness[sample.prompt_id].append(0)
-
-            for sample in samples:
-                sum_number = sum(prompt_correctness[sample.prompt_id])
-                if sum_number == 0 or sum_number == len(prompt_correctness[sample.prompt_id]):
-                    continue
-                filtered_samples.append(sample)
-
-        GlobalMetrics.filter_rate_after_reward_fn.add(1 - float(len(filtered_samples) / len(samples)))
-        return filtered_samples
+    def filter_samples(self, samples: list[PPOSample]) -> list[PPOSample]:
+        GlobalMetrics.sample_filter_rate.add(0.0 / len(samples))
+        return samples
 
     def log_solution_think_tokens(self, all_samples: list[PPOSample], tokenizer):
         """Calculate and log solution/think tokens split by </think> marker.

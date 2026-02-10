@@ -169,9 +169,5 @@ def build_grad_buffers(
                 in_dp_offset += param.numel()
 
         overhead_ratio = num_elements_padded / sum(param_sizes)
-        logger.info(
-            f"Gradbuffer: {bucket_key}, elements: {len(params)}, dp_world_size: {dp_size}, "
-            f"mem_overhead: {overhead_ratio}"
-        )
 
     return fp32_buffers, raw_typed_buffers, param_info

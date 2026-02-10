@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from typing import Any
 
 import torch
+from loguru import logger
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from torch.nn import Parameter
 from torch.utils.hooks import RemovableHandle
@@ -77,6 +78,8 @@ class GradientManager(ABC):
         self.optimizer = optimizer
 
         self.build_buffer()
+        for bucket_key, buffer in self._grad_buffers.items():
+            logger.info(f"Gradbuffer: {bucket_key}, dp_world_size: {PM.size_of(bucket_key.allreduce_group)}")
 
         # We need to store them so they don't go out of scope.
         self._grad_acc_hook_handles: list[tuple[RemovableHandle, object]] = []

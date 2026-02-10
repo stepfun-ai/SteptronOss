@@ -87,8 +87,9 @@ class VLLMController:
 
         my_ip = socket.gethostbyname(socket.getfqdn(socket.gethostname()))
         self.endpoint = f"{my_ip}:{self.vllm_port}"
-        exp_redis.set(f"VLLM_NUM_WORKERS_OF_{self.cfg.model_name}", self.nnodes)
-        exp_redis.rpush(f"VLLM_WORKERS_OF_{self.cfg.model_name}", self.endpoint)
+        model_name = self.cfg.model_name
+        exp_redis.set(f"VLLM_NUM_WORKERS_OF_{model_name}", self.nnodes)
+        exp_redis.rpush(f"VLLM_WORKERS_OF_{model_name}", self.endpoint)
         try:
             response = requests.get(
                 f"{self.router_url}/register",

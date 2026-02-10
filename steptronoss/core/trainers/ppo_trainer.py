@@ -86,8 +86,6 @@ class PPOTrainer(BaseTrainer):
 
         self.ppo_cfg = self.exp.trainer_cfg
 
-        self.dynamic_filter_rate = 1.0
-
         self.build_hooks(self.exp.trainer_cfg)
 
     @timeit()
@@ -171,8 +169,7 @@ class PPOTrainer(BaseTrainer):
             elapsed_time = self.timers("interval-time").elapsed(barrier=False, sync_device=True)
             GlobalMetrics.add("iteration_time", elapsed_time)
 
-            if self.iteration % self.exp.trainer_cfg.log_interval == 0:
-                self.training_log()
+            self.training_log()
 
             if (
                 self.exp.checkpoint_cfg.save_path
@@ -268,19 +265,19 @@ class PPOTrainer(BaseTrainer):
         per-DP (each DP holds different packed samples).
         """
 
-        logger.info(f"Global Rollout: {len(all_samples)}", at=-1)
-
         # sample_lengths = [balance_key(x) for x in all_samples]
         GlobalMetrics.unpacked_samples.add(float(len(all_samples)))
         if get_vpp_size() > 1:
             d = PM.size_of("DP") // PM.size_of("CP") * PM.size_of("PP")
         else:
             d = PM.size_of("DP") // PM.size_of("CP")
+
         grouped_all_samples, sizes = self._group_samples(
             all_samples,
             max_seq_len=self.exp.trainer_cfg.global_seq_length,
             divisable_by=d,
         )
+        logger.info(f"Global Rollout: pack({len(all_samples)}) -> {len(grouped_all_samples)}", at=-1)
 
         GlobalMetrics.packed_samples.add(float(len(grouped_all_samples)))
 
@@ -455,15 +452,11 @@ class PPOTrainer(BaseTrainer):
         self.ppo_cfg.log_reward_metrics(all_samples)
 
         logger.info(f"Start filter sampels after reward_fn calc", at=-1)
-        after_reward_before_filter_len = len(all_samples)
-        all_samples = self.exp.trainer_cfg.filter_after_rewarding(all_samples)
+        all_samples = self.exp.trainer_cfg.filter_samples(all_samples)
 
         if len(all_samples) == 0:
             logger.info(f"No samples after filtering, skip this iteration", at=-1)
             return
-
-        if self.ppo_cfg.dynamic_sampling:
-            self.dynamic_filter_rate = len(all_samples) / after_reward_before_filter_len
 
         CMT.mark("before_packing")
 
@@ -530,6 +523,7 @@ class PPOTrainer(BaseTrainer):
                         self.critic_iteration,
                         loss=loss,
                         grad_norm=grad_norm,
+                        grad_zeros=num_zeros_in_grad,
                         lr=lr,
                     )
                     GlobalMetrics.critic_grad_norm.add(grad_norm)
@@ -585,6 +579,7 @@ class PPOTrainer(BaseTrainer):
                         ppo_loss=loss,
                         ref_loss=ref_loss,
                         grad_norm=grad_norm,
+                        grad_zeros=num_zeros_in_grad,
                         lr=lr,
                     )
                     self.actor_iteration += 1
@@ -644,7 +639,6 @@ class PPOTrainer(BaseTrainer):
         timers_prefix = f"iteration {self.iteration:8d}/{self.exp.trainer_cfg.train_iters:8d}"
         self.timers.log(
             self.iteration,
-            self.exp.trainer_cfg.log_interval,
             reset=True,
             prefix=timers_prefix,
         )
@@ -661,12 +655,14 @@ class PPOTrainer(BaseTrainer):
             logs = {
                 "iter": f"{self.iteration:8d}/{self.exp.trainer_cfg.train_iters:8d}",
             }
+            if "reward_mean" in metrics:
+                logs["reward_mean"] = f"{metrics['reward_mean']:.4f}"
 
             if user_logs:
                 logs.update(user_logs)
             log_string = " | ".join(f"{k}: {v}" for k, v in logs.items())
             logger.info(log_string)
-            CMT.report_over_world()
+        CMT.report_over_world()
 
     def eval(self):
         pass

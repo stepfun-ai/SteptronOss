@@ -25,10 +25,10 @@ from steptronoss.optimizer.hparam_scheduler import Scheduler
 from steptronoss.timers import init_timers
 from steptronoss.utils import (
     convert_num,
-    get_mem_brief,
     print_n_params,
     setup_logger,
 )
+from steptronoss.utils.memory_tracker import CMT
 from steptronoss.utils.metrics import GlobalMetrics
 
 GlobalMetrics: PretrainMetricConfig
@@ -92,6 +92,7 @@ class DecoderPretrainTrainer(BaseTrainer):
 
         ## Model
         self.models = self.setup_model(self.exp.model_cfg)
+        CMT.mark("after_build_model")
 
         if "model" in state_dicts:
             load_model_checkpoint(
@@ -158,7 +159,8 @@ class DecoderPretrainTrainer(BaseTrainer):
         # Negative log_level won't be recorded to log files
         self.timers("interval-time", log_level=-1).start(barrier=True)
 
-        while self.iteration < self.train_iters:
+        while self.iteration < self.exp.trainer_cfg.train_iters:
+            CMT.mark("start_of_iter")
             update_successful = self.train_step()
             # Logging.
             elapsed_time = self.timers("interval-time").elapsed(barrier=False, sync_device=True)
@@ -209,6 +211,7 @@ class DecoderPretrainTrainer(BaseTrainer):
                     self.grad_manager._cpu_offload(adam_only=False, zero_grad=False)
 
             pp_scheduler.run(grad_accumulation_steps)
+        CMT.mark("after_forward_backward")
 
         # Empty unused memory.
         if self.exp.trainer_cfg.empty_unused_memory_level >= 1:
@@ -221,6 +224,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         # Update parameters.
         with self.timers.record("optimizer-step", log_level=1):
             update_successful, grad_norm, num_zeros_in_grad = self.grad_manager.step()
+        CMT.mark("after_optimizer_step")
         MoEBlock.update_router_balance_bias_per_gbs(self.models)
 
         GlobalMetrics.grad_norm.add(grad_norm)
@@ -245,6 +249,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         with self.timers.record("after-step-hooks", log_level=1):
             for hook in self._after_step_hooks:
                 hook(self)
+        CMT.mark("after_step_hooks")
 
         return update_successful
 
@@ -306,9 +311,8 @@ class DecoderPretrainTrainer(BaseTrainer):
             if user_logs:
                 logs.update(user_logs)
             log_string = " | ".join(f"{k}: {v}" for k, v in logs.items())
-            log_string = log_string + " | " + get_mem_brief().split("Report")[1].strip()
-
             logger.info(log_string, at=-1)
+            CMT.report_over_world()
 
     # Builders:
     def setup_model(self, model_config: Megatron3DParallelModelConfig) -> torch.nn.ModuleList:

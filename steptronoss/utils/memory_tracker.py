@@ -1,8 +1,11 @@
+import atexit
 import time
 from typing import TypedDict
 
 import torch
 from loguru import logger
+
+from steptronoss.utils.general import convert_num
 
 
 def get_mem_brief(name="", unit="G"):
@@ -82,7 +85,7 @@ class CudaMemoryTracker:
             return time.strftime("%H:%M:%S", time.localtime(ts))
 
         def _fmt_bytes(num: float) -> str:
-            return f"{num / (1024 ** 2):.1f} MB"
+            return f"{convert_num(num, G=True)}B"
 
         # Topk memory positions by allocated bytes.
         top_positions = sorted(self.tracks, key=lambda x: x["allocated"], reverse=True)[:topk]
@@ -137,15 +140,14 @@ class CudaMemoryTracker:
         topk = max(1, topk)
         topk_ranks = max(1, topk_ranks)
         rank = torch.distributed.get_rank()
-        world_size = torch.distributed.get_world_size()
 
         def _fmt_time(ts: float) -> str:
             return time.strftime("%H:%M:%S", time.localtime(ts))
 
         def _fmt_bytes(num: float) -> str:
-            return f"{num / (1024 ** 2):.1f} MB"
+            return f"{convert_num(num, G=True)}B"
 
-        lines = ["[CudaMemoryTracker Report]", f"Rank {rank}/{world_size}"]
+        lines = ["[CudaMemoryTracker Report]", "=" * 90]
         if not self.tracks:
             lines.append("No local records.")
             local_peak = MemoryRecord(
@@ -224,9 +226,21 @@ class CudaMemoryTracker:
                     f"allocated={_fmt_bytes(rec['allocated'])}, "
                     f"reserved={_fmt_bytes(rec['reserved'])}"
                 )
-
+        lines.append("=" * 90)
         logger.info("\n".join(lines), at=0)
         self.tracks.clear()
 
 
 CMT = CudaMemoryTracker()
+
+
+def _report_cmt_at_exit():
+    try:
+        if torch.cuda.is_available():
+            CMT.report()
+    except Exception:
+        # Best-effort on shutdown; avoid raising during interpreter exit.
+        pass
+
+
+atexit.register(_report_cmt_at_exit)
