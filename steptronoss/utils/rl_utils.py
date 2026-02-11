@@ -358,7 +358,6 @@ class PersistentFlow(dict[str, PersistentQueue]):
     def __init__(
         self,
         meta: dict = None,
-        dump_path: str = None,
         **stages: dict[str, PersistentQueue],
     ):
         """Data flow that supports checkpointing. NOTE: One sample must be marked as finish
@@ -392,27 +391,6 @@ class PersistentFlow(dict[str, PersistentQueue]):
 
         self.lock = threading.Lock()
         self.meta = meta or {}
-        # Auto dump
-        self.dump_path = dump_path
-        if self.dump_path:
-            self._restore_from_dump()
-            self.dump_interval = 600
-            self.dumper = threading.Thread(target=self._dump_self_worker, name="FlowDumper", daemon=True)
-            self.dumper.start()
-
-    def _restore_from_dump(self):
-        if os.path.exists(self.dump_path):
-            state_dict = torch.load(self.dump_path, weights_only=False)
-            with self.lock:
-                self.load_state_dict(state_dict)
-
-    def _dump_self_worker(self):
-        while True:
-            with self.lock:
-                state_dict = self.state_dict()
-                torch.save(state_dict, self.dump_path + ".tmp.pt")
-                shutil.move(self.dump_path + ".tmp.pt", self.dump_path)
-            time.sleep(self.dump_interval)
 
     def state_dict(self):
         return {k: self[k].state_dict() for k in self} | {"meta": self.meta}

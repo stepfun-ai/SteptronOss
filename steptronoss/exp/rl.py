@@ -199,9 +199,6 @@ class PPOCheckpointCfg(CheckpointConfig):
     critic = RoleCheckpointConfig
     reference = RoleCheckpointConfig
 
-    load_option = None
-    save_option = None
-
 
 class PPOMetricConfig(MetricConfig):
     """PPO Metrics! You can start your RL journey from reading the metrics below"""

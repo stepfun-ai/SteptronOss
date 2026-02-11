@@ -1,11 +1,8 @@
 import re
-from typing import Any
-
-from loguru import logger
+from typing import Any, Callable
 
 from steptronoss.exp.rl import EnvTrajectory, StopType
 from steptronoss.generation.base_generatable import TrainableItem
-from steptronoss.utils import get_exp_id
 
 
 class SimpleTrainable(TrainableItem):
@@ -15,12 +12,16 @@ class SimpleTrainable(TrainableItem):
     the model to emit an answer formatted as ``\\boxed{...}``, and compares the
     extracted contents to the provided ground truth string.
 
+    Note:
+        ``endpoint_getter`` / ``model_name_getter`` are used (instead of concrete
+        values) so resumed runs can resolve updated router endpoints and EXP_ID.
+
     Example:
         trainable = SimpleTrainable(
             prompt_text="Compute 1+2. Answer in \\boxed{...}.",
             gt="3",
-            endpoint="http://127.0.0.1:8000",
-            model_name_template="deployed-model-{EXP_ID}",
+            endpoint_getter=my_endpoint_getter,
+            model_name_getter=my_model_name_getter,
             sampling_params={"max_tokens": 32},
             max_tokens=32,
         )
@@ -30,16 +31,16 @@ class SimpleTrainable(TrainableItem):
         self,
         prompt_text: str,
         gt: str,
-        endpoint: str,
-        model_name_template: str,
+        endpoint_getter: Callable[[], str],
+        model_name_getter: Callable[[], str],
         sampling_params: dict[str, Any],
         max_tokens: int,
     ):
         super().__init__()
         self.prompt_text = prompt_text
         self.gt = gt
-        self.endpoint = endpoint
-        self.model_name_template = model_name_template
+        self.endpoint_getter = endpoint_getter
+        self.model_name_getter = model_name_getter
         self.sampling_params = sampling_params
         self.max_tokens = max_tokens
 
@@ -103,4 +104,8 @@ class SimpleTrainable(TrainableItem):
 
     @property
     def model_name(self) -> str:
-        return self.model_name_template.format(EXP_ID=get_exp_id())
+        return self.model_name_getter()
+
+    @property
+    def endpoint(self) -> str:
+        return self.endpoint_getter()

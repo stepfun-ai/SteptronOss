@@ -31,8 +31,7 @@ class _FakeResponse:
 def _make_cfg():
     cfg = VLLMDeployConfig()
     cfg.model_config_path = "dummy"
-    cfg.model_name = "dummy"
-    cfg.resource_cfg.envs = {}
+    cfg.model_name_template = "dummy"
     cfg.vllm_tp = 1
     cfg.vllm_dp = 1
     return cfg
@@ -40,6 +39,7 @@ def _make_cfg():
 
 def test_run_vllm_spawns_process(monkeypatch):
     cfg = _make_cfg()
+    monkeypatch.setenv("NNODES", "1")
     controller = VLLMController(cfg)
 
     fake_proc = _FakeProcess(stdout=io.StringIO(""), stderr=io.StringIO(""))
@@ -62,6 +62,7 @@ def test_run_vllm_spawns_process(monkeypatch):
 
 def test_register_and_deregister(monkeypatch):
     cfg = _make_cfg()
+    monkeypatch.setenv("NNODES", "1")
     controller = VLLMController(cfg)
     controller.vllm_port = 8001
 
@@ -72,9 +73,17 @@ def test_register_and_deregister(monkeypatch):
         return _FakeResponse(status_code=200, text="ok")
 
     monkeypatch.setattr("requests.get", _fake_get)
+
+    class _FakeRedis:
+        def set(self, *_args, **_kwargs):
+            return True
+
+        def rpush(self, *_args, **_kwargs):
+            return True
+
     monkeypatch.setattr(
         "steptronoss.generation.vllm.vllm_controller.get_exp_redis",
-        lambda: object(),
+        lambda: _FakeRedis(),
     )
     monkeypatch.setattr(
         "steptronoss.generation.vllm.vllm_controller.block_get_redis",

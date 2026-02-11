@@ -41,6 +41,14 @@ class FlowController(metaclass=ABCMeta):
     def get_train_samples(self) -> list[EnvTrajectory]:
         pass
 
+    @abstractmethod
+    def state_dict(self):
+        pass
+
+    @abstractmethod
+    def _load_state_dict(self):
+        pass
+
 
 class SimpleFlowController(FlowController):
 
@@ -53,7 +61,7 @@ class SimpleFlowController(FlowController):
 
         self.yielded_but_not_acked_train_samples = []
 
-    def start(self, dataloader: Nextable, model: torch.nn.Module):
+    def start(self, dataloader: Nextable, model: torch.nn.Module, state_dict: Optional[dict] = None):
         self.model = model
         if PM.world_rank == 0:
             self.vllm_client = self.cfg.vllm_cfg.build_cli()
@@ -61,20 +69,36 @@ class SimpleFlowController(FlowController):
             self.generator = GenerationController()
 
             self.flow = PersistentFlow(
-                dump_path=os.path.join(self.cfg.save_path, "flow_ckpt.pt"),
-                **{
-                    "source": PersistentSource(nextable=dataloader),
-                    # pre-gen Queue: --> [... P3, P2, Require(weight1), P1, P0, Require(weight0)]
-                    "pre-gen": PersistentQueue(),
-                    # pre-train Queue: --> [..., CanTrain(), R3, R2, CanTrain(), R1, R0]
-                    "pre-train": PersistentQueue(),
-                    # trained samples move to dumper. NOTE: this ack by self.dump_checkpoint()
-                },
+                source=PersistentSource(nextable=dataloader),
+                # pre_gen Queue: --> [... P3, P2, Require(weight1), P1, P0, Require(weight0)]
+                pre_gen=PersistentQueue(),
+                # pre_train Queue: --> [..., CanTrain(), R3, R2, CanTrain(), R1, R0]
+                pre_train=PersistentQueue(),
             )
-
+            if state_dict:
+                self._load_state_dict(state_dict)
             Thread(target=self._generation_worker, daemon=True).start()
             Thread(target=self._control_worker, daemon=True).start()
 
+    def state_dict(self):
+        if PM.world_rank == 0:
+            return {
+                "infer_weight_version": self.infer_weight_version,
+                "train_weight_version": self.train_weight_version,
+                "flow": self.flow.state_dict(),
+            }
+        return {}
+
+    def _load_state_dict(self, state_dict):
+        if PM.world_rank != 0 or not state_dict:
+            return
+        self.infer_weight_version = -1
+        self.train_weight_version = state_dict.get("train_weight_version", -1)
+        if "flow" in state_dict:
+            self.flow.load_state_dict(state_dict["flow"])
+            logger.warning(f"FlowCkpt loaded, flow:\n{self.flow}")
+
+    @timeit(level=1)
     def sync_weight(self):
         """Synchronize weights from train to infer, if already synced, do nothing."""
         if self.infer_weight_version != self.train_weight_version:
@@ -85,7 +109,7 @@ class SimpleFlowController(FlowController):
 
     def _control_worker(self):
         """
-        transfer num_prompts samples from source to pre-gen stream:
+        transfer num_prompts samples from source to pre_gen stream:
         ```
         - for on-policy  : req(0), p0, p1, train(), req(1), p2, p3, train(), req(2), ...
         - for OSOP       : req(0), p0, p1, train(), req(0), p2, p3, train(), req(1), ...
@@ -100,12 +124,12 @@ class SimpleFlowController(FlowController):
                 version = max(self.flow.meta["scheduled-weight-version"], 0)
 
                 with self.flow.lock:
-                    self.flow["pre-gen"].put(PersistentFlow.Signal("need_version", version=version))
+                    self.flow["pre_gen"].put(PersistentFlow.Signal("need_version", version=version))
 
                     for i in range(self.cfg.prompt_per_iter):
-                        self.flow["pre-gen"].put(self.flow["source"].pop())
+                        self.flow["pre_gen"].put(self.flow["source"].pop())
 
-                    self.flow["pre-gen"].put(PersistentFlow.Signal("train"))
+                    self.flow["pre_gen"].put(PersistentFlow.Signal("train"))
 
                     self.flow.meta["scheduled-weight-version"] += 1
 
@@ -113,9 +137,9 @@ class SimpleFlowController(FlowController):
 
     def _generation_worker(self):
         """
-        transfer all Trainable from pre-gen to post-gen:
+        transfer all Trainable from pre_gen to post-gen:
         ```
-        pre-gen: req(0), p0, p1, train(), req(1), p2, p3, train(), ...
+        pre_gen: req(0), p0, p1, train(), req(1), p2, p3, train(), ...
 
         req(n): wait till infer_weight_version >= n
         train(): wait till prev prompts done. (ack req)
@@ -132,12 +156,12 @@ class SimpleFlowController(FlowController):
                     generated = []
 
             with self.flow.lock:
-                self.flow["pre-train"].put(generated)
-                self.flow["pre-gen"].ack(genable.meta.pop("ack_pre_id"))
+                self.flow["pre_train"].put(generated)
+                self.flow["pre_gen"].ack(genable.meta.pop("ack_pre_id"))
             active_counter -= 1
 
         while 1:
-            ack_id, data = self.flow["pre-gen"].get()
+            ack_id, data = self.flow["pre_gen"].get()
             if isinstance(data, PersistentFlow.Signal):
                 if data.name == "need_version":
                     while self.infer_weight_version < data["version"]:
@@ -151,9 +175,9 @@ class SimpleFlowController(FlowController):
 
                     with self.flow.lock:
                         if ack_id_gen_req_version:
-                            self.flow["pre-gen"].ack(ack_id_gen_req_version)
-                        self.flow["pre-train"].put(data)
-                        self.flow["pre-gen"].ack(ack_id)
+                            self.flow["pre_gen"].ack(ack_id_gen_req_version)
+                        self.flow["pre_train"].put(data)
+                        self.flow["pre_gen"].ack(ack_id)
 
             else:
                 data.meta["ack_pre_id"] = ack_id
@@ -167,7 +191,7 @@ class SimpleFlowController(FlowController):
         trajectories = []
         if PM.world_rank == 0:
             while True:
-                ack_id, trajs = self.flow["pre-train"].get()
+                ack_id, trajs = self.flow["pre_train"].get()
                 self.yielded_but_not_acked_train_samples.append(ack_id)
 
                 if trajs == PersistentFlow.Signal("train"):
@@ -182,7 +206,7 @@ class SimpleFlowController(FlowController):
     def weight_dumped(self):
         if PM.world_rank == 0:
             for ack_id in self.yielded_but_not_acked_train_samples:
-                self.flow["pre-train"].ack(ack_id)
+                self.flow["pre_train"].ack(ack_id)
             self.yielded_but_not_acked_train_samples.clear()
 
 
@@ -193,11 +217,11 @@ class FullyAsyncFlowController(FlowController):
 
     # max-concurrent = 1
 
-    # infer-so-fast (infer-sleep when len(pre-train) + len(running) > max_untrained_prompts)
+    # infer-so-fast (infer-sleep when len(pre_train) + len(running) > max_untrained_prompts)
     train: <U0>   <T>00000<U1><T>11111<U2>
     infer: <W0>00011122233<W1>34445556<W2>66777
 
-    # train-so-fast (train-sleep when len(pre-train) < prompt_per_iter)
+    # train-so-fast (train-sleep when len(pre_train) < prompt_per_iter)
     train: <U0>      <T>0<U1>  <T>1<U2>  <T>2<U3>  <T>3
     infer: <W0>0000001111<W1>112222<W2>223333<W3>3344444
 
@@ -235,13 +259,28 @@ class FullyAsyncFlowController(FlowController):
             dump_path=os.path.join(self.cfg.save_path, "flow_ckpt.pt"),
             **{
                 "source": PersistentSource(nextable=dataloader),
-                # pre-gen Queue: --> [... P3, P2, Require(weight1), P1, P0, Require(weight0)]
-                "pre-train": PersistentQueue(),
+                # pre_gen Queue: --> [... P3, P2, Require(weight1), P1, P0, Require(weight0)]
+                "pre_train": PersistentQueue(),
                 # trained samples move to dumper. NOTE: this ack by self.dump_checkpoint()
             },
         )
 
         Thread(target=self._generation_worker, daemon=True).start()
+
+    def state_dict(self):
+        return {
+            "infer_weight_version": self.infer_weight_version,
+            "train_weight_version": self.train_weight_version,
+            "flow": self.flow.state_dict(),
+        }
+
+    def _load_state_dict(self, state_dict):
+        if not state_dict:
+            return
+        self.infer_weight_version = state_dict.get("infer_weight_version", -1)
+        self.train_weight_version = state_dict.get("train_weight_version", -1)
+        if "flow" in state_dict:
+            self.flow.load_state_dict(state_dict["flow"])
 
     def sync_weight(self):
         """Synchronize weights from train to infer, if already synced, do nothing."""
@@ -264,9 +303,9 @@ class FullyAsyncFlowController(FlowController):
 
     def _generation_worker(self):
         """
-        transfer all Trainable from pre-gen to post-gen:
+        transfer all Trainable from pre_gen to post-gen:
         ```
-        pre-gen: req(0), p0, p1, train(), req(1), p2, p3, train(), ...
+        pre_gen: req(0), p0, p1, train(), req(1), p2, p3, train(), ...
 
         req(n): wait till infer_weight_version >= n
         train(): wait till prev prompts done. (ack req)
@@ -283,12 +322,12 @@ class FullyAsyncFlowController(FlowController):
                     generated = []
 
             with self.flow.lock:
-                self.flow["pre-train"].put(generated)
-                self.flow["pre-gen"].ack(genable.meta.pop("ack_pre_id"))
+                self.flow["pre_train"].put(generated)
+                self.flow["pre_gen"].ack(genable.meta.pop("ack_pre_id"))
             active_counter -= 1
 
         while 1:
-            ack_id, data = self.flow["pre-gen"].get()
+            ack_id, data = self.flow["pre_gen"].get()
             if isinstance(data, PersistentFlow.Signal):
                 if data.name == "need_version":
                     while self.infer_weight_version < data["version"]:
@@ -302,9 +341,9 @@ class FullyAsyncFlowController(FlowController):
 
                     with self.flow.lock:
                         if ack_id_gen_req_version:
-                            self.flow["pre-gen"].ack(ack_id_gen_req_version)
-                        self.flow["pre-train"].put(data)
-                        self.flow["pre-gen"].ack(ack_id)
+                            self.flow["pre_gen"].ack(ack_id_gen_req_version)
+                        self.flow["pre_train"].put(data)
+                        self.flow["pre_gen"].ack(ack_id)
 
             else:
                 data.meta["ack_pre_id"] = ack_id
@@ -317,7 +356,7 @@ class FullyAsyncFlowController(FlowController):
         self.sync_weight()
         trajectories = []
         while True:
-            ack_id, trajs = self.flow["pre-train"].get()
+            ack_id, trajs = self.flow["pre_train"].get()
             self.yielded_but_not_acked_train_samples.append(ack_id)
 
             if trajs == PersistentFlow.Signal("train"):
@@ -328,5 +367,5 @@ class FullyAsyncFlowController(FlowController):
 
     def weight_dumped(self):
         for ack_id in self.yielded_but_not_acked_train_samples:
-            self.flow["pre-train"].ack(ack_id)
+            self.flow["pre_train"].ack(ack_id)
         self.yielded_but_not_acked_train_samples.clear()

@@ -45,6 +45,8 @@ dependencies = [
     "httpx",
     "pip>=25.3",
     "vllm>=0.11",
+    "tensorboard>=2.20.0",
+    "asciichartpy>=1.5.25",
 ]
 
 

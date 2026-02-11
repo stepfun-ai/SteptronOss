@@ -88,6 +88,72 @@ def get_mem_brief(name="", unit="G"):
     return string
 
 
+def format_layermap(layermap: dict) -> str:
+    """Format a nested layermap dict with collapsed consecutive ranges."""
+
+    def _is_int_dict(d: dict) -> bool:
+        return isinstance(d, dict) and d and all(isinstance(k, int) for k in d.keys())
+
+    def _is_pp_vp_dict(d: dict) -> bool:
+        if not _is_int_dict(d):
+            return False
+        return all(_is_int_dict(v) for v in d.values())
+
+    def _is_leaf_dict(d: dict) -> bool:
+        return isinstance(d, dict) and all(not isinstance(v, dict) for v in d.values())
+
+    def _format_leaf(d: dict) -> str:
+        items = ", ".join(f"{k}: {v!r}" for k, v in sorted(d.items()))
+        return "{" + items + "}"
+
+    def _format_node(node, indent: int) -> str:
+        pad = " " * indent
+        if _is_pp_vp_dict(node):
+            lines = ["{"]
+            for pp in sorted(node.keys()):
+                for vp in sorted(node[pp].keys()):
+                    value = node[pp][vp]
+                    value_str = _format_node(value, indent + 2)
+                    lines.append(f"{pad}pp{pp}/vp{vp}: {value_str}")
+            lines.append(" " * (indent - 2) + "}")
+            return "\n".join(lines)
+        if _is_int_dict(node):
+            items = []
+            keys = sorted(node.keys())
+            i = 0
+            while i < len(keys):
+                start = keys[i]
+                value = node[start]
+                end = start
+                j = i + 1
+                while j < len(keys) and keys[j] == end + 1 and node[keys[j]] == value:
+                    end = keys[j]
+                    j += 1
+                key_str = f"{start}" if start == end else f"{start}-{end}"
+                if isinstance(value, dict) and _is_leaf_dict(value):
+                    value_str = _format_leaf(value)
+                else:
+                    value_str = _format_node(value, indent + 2)
+                items.append(f"{pad}{key_str}: {value_str}")
+                i = j
+            return "{\n" + ",\n".join(items) + "\n" + (" " * (indent - 2)) + "}"
+
+        if isinstance(node, dict):
+            items = []
+            for key in sorted(node.keys()):
+                value = node[key]
+                if isinstance(value, dict) and _is_leaf_dict(value):
+                    value_str = _format_leaf(value)
+                else:
+                    value_str = _format_node(value, indent + 2)
+                items.append(f"{pad}{key!r}: {value_str}")
+            return "{\n" + ",\n".join(items) + "\n" + (" " * (indent - 2)) + "}"
+
+        return repr(node)
+
+    return _format_node(layermap, 2)
+
+
 def force_clear_mem():
     """NOTE: 这个函数会将所有gc管理的cuda tensor挪到CPU, 但并不负责将它们搬回CUDA"""
     import gc

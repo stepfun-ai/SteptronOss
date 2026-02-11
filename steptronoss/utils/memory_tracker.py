@@ -1,4 +1,5 @@
 import atexit
+import os
 import time
 from typing import TypedDict
 
@@ -50,6 +51,24 @@ class MemoryRecord(TypedDict):
     time: float
     allocated: float
     reserved: float
+    cpu_rss: float
+
+
+def _get_cpu_rss_bytes() -> float:
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    return float(parts[1]) * 1024
+    except Exception:
+        pass
+    try:
+        import resource
+
+        return float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+    except Exception:
+        return 0.0
 
 
 class CudaMemoryTracker:
@@ -57,14 +76,22 @@ class CudaMemoryTracker:
         self.tracks: list[MemoryRecord] = []
 
     def mark(self, mark: str = None):
+        if os.getenv("MEM_DIAGNOSE") is None:
+            return
         if mark is None:
             mark = get_caller_name(depth=1)
+        allocated = 0.0
+        reserved = 0.0
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated()
+            reserved = torch.cuda.memory_reserved()
         self.tracks.append(
             MemoryRecord(
                 mark=mark,
                 time=time.time(),
-                allocated=torch.cuda.memory_allocated(),
-                reserved=torch.cuda.memory_reserved(),
+                allocated=allocated,
+                reserved=reserved,
+                cpu_rss=_get_cpu_rss_bytes(),
             )
         )
 
@@ -75,6 +102,8 @@ class CudaMemoryTracker:
 
         and clear tracks.
         """
+        if os.getenv("MEM_DIAGNOSE") is None:
+            return
         if not self.tracks:
             logger.info("CudaMemoryTracker report: no records.")
             return
@@ -87,12 +116,12 @@ class CudaMemoryTracker:
         def _fmt_bytes(num: float) -> str:
             return f"{convert_num(num, G=True)}B"
 
-        # Topk memory positions by allocated bytes.
+        # Topk CUDA memory positions by allocated bytes.
         top_positions = sorted(self.tracks, key=lambda x: x["allocated"], reverse=True)[:topk]
 
         lines = [
             "[CudaMemoryTracker Report]",
-            f"Top{topk} memory positions (allocated):",
+            f"Top{topk} CUDA memory positions (allocated):",
         ]
         for rec in top_positions:
             lines.append(
@@ -102,7 +131,7 @@ class CudaMemoryTracker:
                 f"reserved={_fmt_bytes(rec['reserved'])}"
             )
 
-        # Topk deltas between consecutive marks.
+        # Topk CUDA deltas between consecutive marks.
         if len(self.tracks) >= 2:
             deltas: list[tuple[float, int]] = []
             for idx in range(1, len(self.tracks)):
@@ -112,7 +141,7 @@ class CudaMemoryTracker:
                 deltas.append((delta, idx))
             top_deltas = sorted(deltas, key=lambda x: x[0], reverse=True)[:topk]
 
-            lines.append(f"Top{topk} memory deltas (allocated):")
+            lines.append(f"Top{topk} CUDA memory deltas (allocated):")
             for delta, idx in top_deltas:
                 prev = self.tracks[idx - 1]
                 curr = self.tracks[idx]
@@ -123,7 +152,35 @@ class CudaMemoryTracker:
                     f"delta={_fmt_bytes(delta)}"
                 )
         else:
-            lines.append(f"Top{topk} memory deltas (allocated): insufficient records.")
+            lines.append(f"Top{topk} CUDA memory deltas (allocated): insufficient records.")
+
+        # Topk CPU memory positions by rss bytes.
+        top_cpu_positions = sorted(self.tracks, key=lambda x: x["cpu_rss"], reverse=True)[:topk]
+        lines.append(f"Top{topk} CPU memory positions (rss):")
+        for rec in top_cpu_positions:
+            lines.append("  " f"{rec['mark']} @ {_fmt_time(rec['time'])} " f"rss={_fmt_bytes(rec['cpu_rss'])}")
+
+        # Topk CPU deltas between consecutive marks.
+        if len(self.tracks) >= 2:
+            cpu_deltas: list[tuple[float, int]] = []
+            for idx in range(1, len(self.tracks)):
+                prev = self.tracks[idx - 1]
+                curr = self.tracks[idx]
+                delta = curr["cpu_rss"] - prev["cpu_rss"]
+                cpu_deltas.append((delta, idx))
+            top_cpu_deltas = sorted(cpu_deltas, key=lambda x: x[0], reverse=True)[:topk]
+            lines.append(f"Top{topk} CPU memory deltas (rss):")
+            for delta, idx in top_cpu_deltas:
+                prev = self.tracks[idx - 1]
+                curr = self.tracks[idx]
+                lines.append(
+                    "  "
+                    f"{prev['mark']} -> {curr['mark']} "
+                    f"({ _fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
+                    f"delta={_fmt_bytes(delta)}"
+                )
+        else:
+            lines.append(f"Top{topk} CPU memory deltas (rss): insufficient records.")
 
         logger.info("\n".join(lines))
         self.tracks.clear()
@@ -133,6 +190,8 @@ class CudaMemoryTracker:
         most and least memory peak. NOTE: this function use all_gather and therefore
         introduces a global barrier.
         """
+        if os.getenv("MEM_DIAGNOSE") is None:
+            return
         if not torch.distributed.is_available() or not torch.distributed.is_initialized():
             self.report(topk=topk)
             return
@@ -155,11 +214,12 @@ class CudaMemoryTracker:
                 time=0.0,
                 allocated=0.0,
                 reserved=0.0,
+                cpu_rss=0.0,
             )
         else:
-            # Topk memory positions by allocated bytes.
+            # Topk CUDA memory positions by allocated bytes.
             top_positions = sorted(self.tracks, key=lambda x: x["allocated"], reverse=True)[:topk]
-            lines.append(f"Top{topk} memory positions (allocated):")
+            lines.append(f"Top{topk} CUDA memory positions (allocated):")
             for rec in top_positions:
                 lines.append(
                     "  "
@@ -168,7 +228,7 @@ class CudaMemoryTracker:
                     f"reserved={_fmt_bytes(rec['reserved'])}"
                 )
 
-            # Topk deltas between consecutive marks.
+            # Topk CUDA deltas between consecutive marks.
             if len(self.tracks) >= 2:
                 deltas: list[tuple[float, int]] = []
                 for idx in range(1, len(self.tracks)):
@@ -177,7 +237,7 @@ class CudaMemoryTracker:
                     delta = curr["allocated"] - prev["allocated"]
                     deltas.append((delta, idx))
                 top_deltas = sorted(deltas, key=lambda x: x[0], reverse=True)[:topk]
-                lines.append(f"Top{topk} memory deltas (allocated):")
+                lines.append(f"Top{topk} CUDA memory deltas (allocated):")
                 for delta, idx in top_deltas:
                     prev = self.tracks[idx - 1]
                     curr = self.tracks[idx]
@@ -188,7 +248,33 @@ class CudaMemoryTracker:
                         f"delta={_fmt_bytes(delta)}"
                     )
             else:
-                lines.append(f"Top{topk} memory deltas (allocated): insufficient records.")
+                lines.append(f"Top{topk} CUDA memory deltas (allocated): insufficient records.")
+
+            top_cpu_positions = sorted(self.tracks, key=lambda x: x["cpu_rss"], reverse=True)[:topk]
+            lines.append(f"Top{topk} CPU memory positions (rss):")
+            for rec in top_cpu_positions:
+                lines.append("  " f"{rec['mark']} @ {_fmt_time(rec['time'])} " f"rss={_fmt_bytes(rec['cpu_rss'])}")
+
+            if len(self.tracks) >= 2:
+                cpu_deltas: list[tuple[float, int]] = []
+                for idx in range(1, len(self.tracks)):
+                    prev = self.tracks[idx - 1]
+                    curr = self.tracks[idx]
+                    delta = curr["cpu_rss"] - prev["cpu_rss"]
+                    cpu_deltas.append((delta, idx))
+                top_cpu_deltas = sorted(cpu_deltas, key=lambda x: x[0], reverse=True)[:topk]
+                lines.append(f"Top{topk} CPU memory deltas (rss):")
+                for delta, idx in top_cpu_deltas:
+                    prev = self.tracks[idx - 1]
+                    curr = self.tracks[idx]
+                    lines.append(
+                        "  "
+                        f"{prev['mark']} -> {curr['mark']} "
+                        f"({ _fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
+                        f"delta={_fmt_bytes(delta)}"
+                    )
+            else:
+                lines.append(f"Top{topk} CPU memory deltas (rss): insufficient records.")
 
             local_peak = max(self.tracks, key=lambda x: x["allocated"])
 
@@ -200,6 +286,7 @@ class CudaMemoryTracker:
             "time": local_peak["time"],
             "allocated": float(local_peak["allocated"]),
             "reserved": float(local_peak["reserved"]),
+            "cpu_rss": float(local_peak["cpu_rss"]),
         }
         gathered = all_gather_object(payload)
 
@@ -225,6 +312,23 @@ class CudaMemoryTracker:
                     f"{rec['mark']} @ {_fmt_time(rec['time'])} "
                     f"allocated={_fmt_bytes(rec['allocated'])}, "
                     f"reserved={_fmt_bytes(rec['reserved'])}"
+                )
+            gathered_sorted_cpu = sorted(gathered, key=lambda x: x["cpu_rss"])
+            lines.append(f"Top{topk_ranks} ranks with least CPU peak (rss):")
+            for rec in gathered_sorted_cpu[:topk_ranks]:
+                lines.append(
+                    "  "
+                    f"rank={rec['rank']} "
+                    f"{rec['mark']} @ {_fmt_time(rec['time'])} "
+                    f"rss={_fmt_bytes(rec['cpu_rss'])}"
+                )
+            lines.append(f"Top{topk_ranks} ranks with most CPU peak (rss):")
+            for rec in gathered_sorted_cpu[-topk_ranks:][::-1]:
+                lines.append(
+                    "  "
+                    f"rank={rec['rank']} "
+                    f"{rec['mark']} @ {_fmt_time(rec['time'])} "
+                    f"rss={_fmt_bytes(rec['cpu_rss'])}"
                 )
         lines.append("=" * 90)
         logger.info("\n".join(lines), at=0)

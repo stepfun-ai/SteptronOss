@@ -32,6 +32,7 @@ from steptronoss.model.common.parallel_embedding import (
 from steptronoss.model.common.rms_norm import RMSNorm
 from steptronoss.model.module import MegatronModule
 from steptronoss.utils.general import get_position_id_from_cu_seqlens
+from steptronoss.utils.utils import format_layermap
 
 
 class DecoderLLMConfig(Megatron3DParallelModelConfig):
@@ -192,7 +193,7 @@ class LlamaLikeModel(MegatronModule):
         # Build layer map if not provided
         self.layer_map = layer_map or self._build_default_layer_map()
 
-        logger.info(self.layer_map)
+        logger.info(format_layermap(self.layer_map), at=0)
 
         self.build(self.layer_map)
 

@@ -5,7 +5,7 @@ import os
 from configurize import Config, Ref, writable_property
 
 
-class SaveOptions(Config):
+class CkptOptions(Config):
     """Option Config, use True for load
 
     options.none(but=['model']) for load model only
@@ -13,39 +13,34 @@ class SaveOptions(Config):
     options.all(but=['optimizer']) for NOT load optimizer only.
     """
 
-    model: bool
-    optimizer: bool
-    scheduler: bool
-    data: bool
-    rng_state: bool
-
-    def __init__(self):
-        super().__init__()
-        self.model = True
-        self.optimizer = True
-        self.scheduler = True
-        self.data = True
-        self.rng_state = True
-
-    def all(self, but: list[str] = []) -> SaveOptions:
+    def all(self, but: list[str] = []) -> "CkptOptions":
         for k, _ in self.items():
             setattr(self, k, k not in but)
         return self
 
-    def none(self, but: list[str] = []) -> SaveOptions:
+    def none(self, but: list[str] = []) -> "CkptOptions":
         for k, _ in self.items():
             setattr(self, k, k in but)
         return self
 
 
-class LoadOptions(SaveOptions):
-    exp: bool
-    iter: bool
+class SaveOptions(CkptOptions):
+    model: bool = True
+    optimizer: bool = True
+    scheduler: bool = True
+    data: bool = True
+    rng_state: bool = True
 
-    def __init__(self):
-        super().__init__()
-        self.exp = True
-        self.iter = True
+
+class LoadOptions(CkptOptions):
+    model: bool = True
+    optimizer: bool = True
+    scheduler: bool = True
+    data: bool = True
+    rng_state: bool = True
+
+    exp: bool = True
+    iter: bool = True
 
 
 class CheckpointConfig(Config):

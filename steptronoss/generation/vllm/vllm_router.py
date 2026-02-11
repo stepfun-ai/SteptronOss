@@ -90,7 +90,7 @@ class VLLMRouter:
         #     raise RuntimeError("It seems an VLLM router has already running!")
         exp_redis.set(f"VLLM_ROUTER_ADDR_PORT_{self.cfg.router_addr_key}", f"{my_ip}:{my_port}")
 
-        uvicorn.run(self.app, host="0.0.0.0", port=my_port)
+        uvicorn.run(self.app, host="0.0.0.0", port=my_port, access_log=False)
 
     def _register_api(self, endpoint: str) -> bool:
         return self.register(endpoint)

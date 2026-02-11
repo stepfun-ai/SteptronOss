@@ -140,6 +140,7 @@ class VLLMDeployConfig(BaseInferenceConfig):
             f"--data-parallel-size {self.vllm_dp}",
             f"--max-num-batched-tokens {self.vllm_max_num_batched_tokens}",
             "--disable-cascade-attn",  # might meet cuda IMA error when using cascade attention
+            "--disable-uvicorn-access-log",
         ]
         if self.vllm_hf_overrides:
             overrides = json.dumps(self.vllm_hf_overrides)

@@ -120,11 +120,6 @@ class PPOTrainer(BaseTrainer):
     @timeit()
     def before_train(self):
         self.initialize_dist()
-
-        # self.prompt_rewards = DistributedDictList(
-        #     dist_group=mpu.get_data_parallel_group()
-        # )
-
         self.build_models_and_flow_controller()
 
         for hook in self._before_train_hooks:
@@ -454,12 +449,7 @@ class PPOTrainer(BaseTrainer):
         logger.info(f"Start filter sampels after reward_fn calc", at=-1)
         all_samples = self.exp.trainer_cfg.filter_samples(all_samples)
 
-        if len(all_samples) == 0:
-            logger.info(f"No samples after filtering, skip this iteration", at=-1)
-            return
-
         CMT.mark("before_packing")
-
         # Packing samples
         logger.info(f"Start packing {len(all_samples)} samples...", at=-1)
         my_samples = self.data_balance_and_pack(all_samples)
@@ -742,6 +732,9 @@ class PPOTrainer(BaseTrainer):
             os.makedirs(self.exp.checkpoint_cfg.save_path, exist_ok=True)
 
         with timeit("build_flow_controller"):
+            from steptronoss import debug
+
+            debug(0)
             state_dicts = self.load_checkpoint()
 
             self.start_iteration = state_dicts.get("iteration", -1) + 1
@@ -756,8 +749,7 @@ class PPOTrainer(BaseTrainer):
 
             self.flow_controller = self.ppo_cfg.flow_cfg.build_flow_controller()
             self.flow_controller.start(
-                dataloader=prompt_stream,
-                model=self.actor.models,
+                dataloader=prompt_stream, model=self.actor.models, state_dict=state_dicts.get("data", None)
             )
 
     # Checkpointing:
@@ -779,6 +771,9 @@ class PPOTrainer(BaseTrainer):
                         logger.warning(f'AutoResume is overwriting exp.load! Raw: "{cfg.load_path}"')
                 from os.path import join
 
+                cfg.load_path = latest_ckpt
+                cfg.load_option.all()
+                cfg.load_safetensors = None
                 cfg.actor.load_path = join(latest_ckpt, "actor")
                 cfg.actor.load_option.all()
                 cfg.actor.load_safetensors = None
@@ -810,6 +805,7 @@ class PPOTrainer(BaseTrainer):
         with cfg.modify(**cfg.actor):
             self.checkpointer.dump_ckpt(
                 cfg=cfg,
+                iter_path=os.path.join(cfg.save_path, f"it{self.iteration}"),
                 sub_name="actor",
                 mark_latest=False,
                 iteration=self.actor_iteration,
@@ -820,6 +816,7 @@ class PPOTrainer(BaseTrainer):
         with cfg.modify(**cfg.critic):
             self.checkpointer.dump_ckpt(
                 cfg=cfg,
+                iter_path=os.path.join(cfg.save_path, f"it{self.iteration}"),
                 sub_name="critic",
                 mark_latest=False,
                 iteration=self.critic_iteration,
@@ -830,18 +827,22 @@ class PPOTrainer(BaseTrainer):
         with cfg.modify(**cfg.reference):
             self.checkpointer.dump_ckpt(
                 cfg=cfg,
+                iter_path=os.path.join(cfg.save_path, f"it{self.iteration}"),
                 sub_name="reference",
+                mark_latest=False,
                 iteration=self.iteration,
                 model=self.reference_model.models,
             )
 
         # trainer state: data & iter
+
+        if self.flow_controller is not None:
+            self.flow_controller.weight_dumped()
+
         self.checkpointer.dump_ckpt(
             cfg=cfg,
             mark_latest=True,
             iteration=self.iteration,
+            dataloader=self.flow_controller,
             extra_info={"exp": self.exp.to_dict()},
         )
-
-        if self.flow_controller is not None:
-            self.flow_controller.weight_dumped()

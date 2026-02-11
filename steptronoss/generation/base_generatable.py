@@ -1,15 +1,12 @@
 from abc import ABC, abstractmethod
-from os.path import join
 from typing import Any
 
-import aiohttp
+from steptronoss.exp.rl import EnvTrajectory
+from steptronoss.utils.comm_utils import block_get_redis, get_exp_redis
+from steptronoss.utils.utils import get_exp_id
 
-from steptronoss.exp.rl import EnvTrajectory, StopType
-from steptronoss.utils import get_exp_id
 
 # Abstract
-
-
 class GenableItem(ABC):
     def __init__(self, meta: dict = None) -> None:
         self.meta: dict = meta or {}
@@ -26,64 +23,33 @@ class TrainableItem(GenableItem):
         pass
 
 
-# Imple
-class OpenAITrainableItem(TrainableItem):
-    base_url: str = "http://stepcast-router:9200/v1"
-    """BaseUrl should contains '/v1/', completion api can be get by f'{base_url}/chat/completion'"""
+class EndpointGetter:
+    """Picklable endpoint resolver.
 
-    api_key: str = ""
-    """Not required for internal endpoint"""
+    We pass a getter instead of a concrete endpoint string because the router
+    address can change between runs/resume; resolving at call time ensures we
+    always hit the current router endpoint after restore.
+    """
 
-    model_name_template: str = "deployed-model-{EXP_ID}"
-    """Required when using router"""
+    def __init__(self, router_addr_key: str):
+        self.router_addr_key = router_addr_key
 
-    @property
-    def model_name(self):
+    def __call__(self) -> str:
+        exp_redis = get_exp_redis()
+        redis_key = f"VLLM_ROUTER_ADDR_PORT_{self.router_addr_key}"
+        return f"http://{block_get_redis(exp_redis, redis_key).decode()}"
+
+
+class ModelNameGetter:
+    """Picklable model-name resolver.
+
+    We pass a getter instead of a concrete model name because model names are
+    derived from EXP_ID at runtime; resolving at call time keeps resumes valid
+    even when EXP_ID changes.
+    """
+
+    def __init__(self, model_name_template: str):
+        self.model_name_template = model_name_template
+
+    def __call__(self) -> str:
         return self.model_name_template.format(EXP_ID=get_exp_id())
-
-
-class SingleTurnPrompt(OpenAITrainableItem):
-    prompt: list[int]
-
-    async def generate(self) -> dict:
-        async with aiohttp.request(
-            method="POST",
-            url=join(self.base_url, "completion"),
-            json={
-                "model": self.model_name,
-                "prompt": self.prompt,
-                "return_token_ids": True,
-                **self.sampling_params,
-            },
-            timeout=aiohttp.ClientTimeout(total=7200.0),
-        ) as response:
-            response = await response.json()
-            decode_ids: list[int] = response["choices"][0]["model_extra"]["token_ids"]
-            finish_reason = response["choices"][0]["finish_reason"]
-
-        return dict(
-            prompt=self.prompt,
-            response=decode_ids,
-            finish_reason=finish_reason,
-        )
-
-    async def generate_for_train(self) -> list[EnvTrajectory]:
-        generated = await self.generate()
-        prompt_ids = generated["prompt"]
-        decoded_ids = generated["response"]
-        trajectory = prompt_ids + decoded_ids
-        is_gen_mask = [0] * len(prompt_ids) + [1] * len(decoded_ids)
-        if generated["finish_reason"] == "length":
-            stop_type = StopType.MAX_LEN
-        else:
-            stop_type = StopType.STOP_STRING
-
-        # TODO: we have to support get logprobs from vllm, code below do not support TIS.
-        sample = EnvTrajectory(
-            trajectory=trajectory,
-            is_gen_mask=is_gen_mask,
-            stop_type=stop_type,
-        )
-        sample.raw_reward = 1.0  # just for example, call your own reward_fn
-        assert sample.can_be_trained
-        return [sample]

@@ -35,6 +35,7 @@ from steptronoss.exp.rl import (
     PPOLikeTrainerConfig,
     PPOMetricConfig,
 )
+from steptronoss.generation.base_generatable import EndpointGetter, ModelNameGetter
 from steptronoss.generation.vllm.vllm_router import VLLMRouterConfig
 from steptronoss.utils.metrics import GlobalMetrics
 from steptronoss.utils.rl_utils import compute_gae
@@ -43,16 +44,16 @@ from steptronoss.utils.rl_utils import compute_gae
 class FakeGenableGenerator(Nextable):
     def __init__(
         self,
-        endpoint: str,
-        model_name_template: str,
+        endpoint_getter,
+        model_name_getter,
         sampling_params: dict[str, Any],
         prompt_text: str,
         gt: str,
         max_tokens: int,
     ):
         super().__init__()
-        self.endpoint = endpoint
-        self.model_name_template = model_name_template
+        self.endpoint_getter = endpoint_getter
+        self.model_name_getter = model_name_getter
         self.sampling_params = sampling_params
         self.prompt_text = prompt_text
         self.gt = gt
@@ -60,8 +61,8 @@ class FakeGenableGenerator(Nextable):
 
     def __next__(self) -> dict[str, Any]:
         return SimpleTrainable(
-            endpoint=self.endpoint,
-            model_name_template=self.model_name_template,
+            endpoint_getter=self.endpoint_getter,
+            model_name_getter=self.model_name_getter,
             sampling_params=self.sampling_params,
             prompt_text=self.prompt_text,
             gt=self.gt,
@@ -83,17 +84,14 @@ class MathPromptDataConfig(DataConfig):
     seed: int = 1234
 
     def build_dataloader(self, dp_rank=0, dp_size=1):
-        from steptronoss.utils.comm_utils import block_get_redis, get_exp_redis
-
         vllm_cfg = TinyRLVRVLLMDeployConfig()
-        exp_redis = get_exp_redis()
-        redis_key = f"VLLM_ROUTER_ADDR_PORT_{vllm_cfg.router_addr_key}"
-        endpoint = f"http://{block_get_redis(exp_redis, redis_key).decode()}"
+        endpoint_getter = EndpointGetter(vllm_cfg.router_addr_key)
+        model_name_getter = ModelNameGetter(vllm_cfg.model_name_template)
         max_tokens = 1024
         sampling_params = vllm_cfg.get_sampling_params({"max_tokens": max_tokens})
         return FakeGenableGenerator(
-            endpoint=endpoint,
-            model_name_template="deployed-model-{EXP_ID}",
+            endpoint_getter=endpoint_getter,
+            model_name_getter=model_name_getter,
             sampling_params=sampling_params,
             prompt_text="请回答：strawberry里有几个r？请用 \\boxed{...} 给出最终答案。",
             gt="3",
@@ -119,7 +117,11 @@ class TinyRLVRResourceConfig(ResourceConfig):
 
         self.task_specs = {
             "trainer": TaskSpec(
-                envs={"ROLE": "trainer", "CUDA_VISIBLE_DEVICES": "0,1,2,3", "CUDA_LAUNCH_BLOCKING": "1"},
+                envs={
+                    "ROLE": "trainer",
+                    "CUDA_VISIBLE_DEVICES": "0,1,2,3",
+                    "CUDA_LAUNCH_BLOCKING": "1",
+                },
                 is_critical=True,
                 command="{TORCHRUN} {COMMAND}",
             ),
@@ -150,11 +152,20 @@ class RLVRActorModelConfig(ActorModelConfig, Qwen3_1p7BConfig):
 
 class Qwen3ValueOutputEmbeddingConfig(Qwen3OutputEmbeddingConfig):
     def build_model(self, tied_embedding_weight=None):
+        from torch.nn.init import trunc_normal_
+
+        from steptronoss.core.parallel_state import PM
         from steptronoss.model.common.parallel_embedding import (
             OneDimensionalOutputEmbedding,
         )
 
-        return OneDimensionalOutputEmbedding(cfg=self)
+        model = OneDimensionalOutputEmbedding(cfg=self)
+        PM.register_rng("TP_DIFF", seed=1234, diff_across=["TP"])
+
+        with PM.use_rng("TP_DIFF"):
+            trunc_normal_(model.output.weight, std=1e-5)
+
+        return model
 
 
 class RLVRCriticModelConfig(CriticModelConfig, Qwen3_1p7BConfig):
@@ -337,6 +348,9 @@ class Exp(PPOLikeExp):
             self.actor_model_cfg.vllm_cfg.run_as_worker()
             return
         if role == "trainer":
+            from steptronoss.utils.optimizable import set_optimization
+
+            set_optimization(AttentionCore="flash-attn")
             self.train()
             return
         raise ValueError(f"Unknown ROLE: {role}")

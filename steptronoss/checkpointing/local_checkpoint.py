@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 import os
 import pickle
+import time
 from os.path import join
 from threading import Thread
 from typing import TYPE_CHECKING, Callable, Optional, TypedDict
@@ -55,45 +56,18 @@ class CheckpointDict(TypedDict):
     extra_info: dict
 
 
-def _dump_with_callback(
-    file_objects: FileObjects,
-    save_path: str,
-    callback: Callable = None,
-):
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
-    rank = dist.get_rank() if dist.is_initialized() else 0
-    for filename, obj in file_objects.items():
-        filename = join(save_path, filename)
-        logger.info(f"<Uploader:{rank}>: Started dumping to {filename}", at=0)
-        with smart_open(filename, "wb") as f:
-            if filename.endswith(".pkl"):
-                pickle.dump(obj, f)
-            else:
-                torch.save(obj, f)
-        del obj
-        gc.collect()
-
-    with smart_open(os.path.join(save_path, f"{rank}.success"), "w") as f:
-        pass
-
-    successes = [f for f in smart_listdir(save_path) if f.endswith(".success")]
-    logger.info(f"Finished uploading: [{len(successes)} / {world_size}]", at=0)
-    if len(successes) == world_size:
-        logger.info(f"All Rank Finished!", at="all")
-        if callback:
-            callback()
-
-
 class Checkpointer:
 
     def __init__(self):
-        self.uploading_threads: list[Thread] = []
+        self.dump_tasks: list[tuple] = []
 
-    def launch_dumper(
+        Thread(target=self._dumper, daemon=True).start()
+
+    def submit_dump_task(
         self,
         file_objects: FileObjects,
         save_path: str,
-        finish_callback: Callable = int,  # hack: use int as callable
+        mark_latest: tuple[str, str] = None,
         async_dump: bool = True,
     ):
         """
@@ -107,46 +81,27 @@ class Checkpointer:
         dist.barrier()
 
         if not async_dump:
-            _dump_with_callback(file_objects, save_path, finish_callback)
-
+            self._dump_with_callback(file_objects, save_path, mark_latest)
         else:
-            uploading_thread = Thread(
-                target=_dump_with_callback,
-                args=(file_objects, save_path, finish_callback),
-            )
-            uploading_thread.start()
-            logger.info(f"Started thread uploading to {save_path}", at=0)
-
-            self.uploading_threads.append(uploading_thread)
+            self.dump_tasks.append((file_objects, save_path, mark_latest))
 
     def join_dumping_thread(self):
         """ensure all dumping threads are finished"""
-        dumping_flag = torch.tensor(0, device=torch.cuda.current_device())
-        working_threads = [x for x in self.uploading_threads if x is not None]
-        if working_threads:  # An uploader exists
-            for thread in working_threads:
-                if thread.is_alive():
-                    dumping_flag += 1
-        torch.distributed.all_reduce(dumping_flag)
 
-        if dumping_flag > 0:
+        if self.dump_tasks:
             logger.warning("Last uploading not finished. Consider increasing your save_interval!")
-            if working_threads:
-                for t in working_threads:
-                    t.join()
-        self.uploading_threads = []
+            while self.dump_tasks:
+                time.sleep(0.5)
 
-    def _get_mark_latest_callback(self, mark_dir: str, latest_path: str):
-        def finish_ckpt_callback():  # update save_path/latest_ckpt -> save_path/it10/
-            latest_tmp = join(mark_dir, f"latest_ckpt.rank{PM.world_rank}")
-            with smart_open(latest_tmp, "w") as f:
-                f.write(latest_path)
-            try:
-                smart_rename(latest_tmp, join(mark_dir, "latest_ckpt"))
-            except:
-                logger.error(f"Rank {PM.world_rank}: Renaming Fail!")
+        torch.distributed.barrier()
 
-        return finish_ckpt_callback
+    def _dumper(self):
+        while 1:
+            if self.dump_tasks:
+                file_objects, save_path, mark_latest = self.dump_tasks.pop(0)
+                self._dump_with_callback(file_objects, save_path, mark_latest)
+            else:
+                time.sleep(1)
 
     @staticmethod
     def size_stat(file_objects: FileObjects):
@@ -172,17 +127,7 @@ class Checkpointer:
         dataloader: object = None,
         extra_info: Optional[dict] = {},
     ) -> FileObjects:
-        comps = " | ".join(
-            [
-                n
-                for x, n in zip(
-                    [model, optimizer, scheduler, dataloader],
-                    ["model", "optimizer", "scheduler", "data"],
-                )
-                if x is not None and cfg.save_option[n]
-            ]
-        )
-        logger.info(f"Savings: {comps}", at=0)
+
         file_dicts: FileObjects = {}
         # Collect args, model, RNG.
         model_state_dict, optim_state_dict = {}, {}
@@ -232,6 +177,7 @@ class Checkpointer:
     def dump_ckpt(
         self,
         cfg: CheckpointConfig,
+        iter_path: Optional[str] = None,
         sub_name="",
         mark_latest=True,
         # objects
@@ -244,16 +190,19 @@ class Checkpointer:
     ):
         """
         Async save a model checkpoint. Return the handle of thread or None.
+        - Files(TPxxx.pt) will save to "iter_path/sub_name/"
+        - After success, "cfg.save_path/latest_ckpt" will be updated, point to "iter_path/"
         """
         extra_info = extra_info or {}
+        iter_path = iter_path or join(cfg.save_path, f"it{iteration}")
+        path_with_subname = join(iter_path, sub_name)
 
-        iter_path = join(cfg.save_path, f"it{iteration}")
         extra_info["iteration"] = iteration
 
         # Save safetensors if configured
         if cfg.save_safetensors:
             dump_safetensors(
-                save_path=os.path.join(cfg.save_path, f"it{iteration}", "hf"),
+                save_path=join(path_with_subname, "hf"),
                 model_reference_path=cfg.model_config_path,
                 tokenizer_reference_path=cfg.tokenizer_path,
                 models=model,
@@ -271,19 +220,14 @@ class Checkpointer:
         self.size_stat(file_dicts)
 
         if mark_latest:
-            finish_callback = self._get_mark_latest_callback(
-                mark_dir=cfg.save_path,
-                latest_path=iter_path,
-            )
+            mark_info = (cfg.save_path, iter_path)
         else:
-            finish_callback = None
+            mark_info = None
 
-        path_with_subname = join(iter_path, sub_name)
-
-        self.launch_dumper(
+        self.submit_dump_task(
             file_objects=file_dicts,
             save_path=path_with_subname,
-            finish_callback=finish_callback,
+            mark_latest=mark_info,
             async_dump=cfg.async_dump,
         )
 
@@ -465,7 +409,7 @@ class Checkpointer:
             f"model: [{'√' if cfg.load_option.model else '×'}] [{'√' if model_exists else '×'}]",
             at=0,
         )
-        if cfg.load_option.model:
+        if cfg.load_option.model and model_exists:
             if "model" in this_rank_data:
                 state_dicts["model"] = [this_rank_data["model"]]
             else:
@@ -529,3 +473,39 @@ class Checkpointer:
             at=0,
         )
         return move_to_memory(state_dicts)
+
+    @staticmethod
+    def _dump_with_callback(
+        file_objects: FileObjects,
+        save_path: str,
+        mark_latest: tuple[str, str] = None,
+    ):
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        for filename, obj in file_objects.items():
+            filename = join(save_path, filename)
+            logger.info(f"<Uploader:{rank}>: Started dumping to {filename}", at=0)
+            with smart_open(filename, "wb") as f:
+                if filename.endswith(".pkl"):
+                    pickle.dump(obj, f)
+                else:
+                    torch.save(obj, f)
+            del obj
+            gc.collect()
+
+        with smart_open(os.path.join(save_path, f"{rank}.success"), "w") as f:
+            pass
+
+        successes = [f for f in smart_listdir(save_path) if f.endswith(".success")]
+        logger.info(f"Finished uploading: [{len(successes)} / {world_size}]", at=0)
+        if len(successes) == world_size:
+            logger.info(f"All Rank Finished!", at="all")
+            if mark_latest:
+                mark_dir, latest_path = mark_latest
+                latest_tmp = join(mark_dir, f"latest_ckpt.rank{PM.world_rank}")
+                with smart_open(latest_tmp, "w") as f:
+                    f.write(latest_path)
+                try:
+                    smart_rename(latest_tmp, join(mark_dir, "latest_ckpt"))
+                except:
+                    logger.error(f"Rank {PM.world_rank}: Renaming Fail!")
