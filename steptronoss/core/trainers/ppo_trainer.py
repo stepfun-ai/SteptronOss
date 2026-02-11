@@ -732,9 +732,6 @@ class PPOTrainer(BaseTrainer):
             os.makedirs(self.exp.checkpoint_cfg.save_path, exist_ok=True)
 
         with timeit("build_flow_controller"):
-            from steptronoss import debug
-
-            debug(0)
             state_dicts = self.load_checkpoint()
 
             self.start_iteration = state_dicts.get("iteration", -1) + 1
