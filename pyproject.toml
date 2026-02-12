@@ -21,7 +21,7 @@ dependencies = [
     "aiohttp",
     "aioredis",
     "boto3",
-    "configurize==0.1.9",
+    "configurize==0.2.0",
     "einops",
     "fastapi",
     "hjson",
