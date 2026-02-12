@@ -215,9 +215,6 @@ class VLLMDeployConfig(BaseInferenceConfig):
             top_k=self.top_k,
             stop=stop_strings,
             stop_token_ids=eos_ids,
-            n=1,  # disable multi rollout
-            logprobs=0,  # Only return logits for the decode token
-            ignore_eos=True,
         )
         sampling_params.update(self.vllm_sampling_params)
         sampling_params.update(override_params)

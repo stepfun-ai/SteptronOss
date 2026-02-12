@@ -82,6 +82,7 @@ class MathPromptDataConfig(DataConfig):
     answer_key: str = "answer"
     shuffle: bool = True
     seed: int = 1234
+    build_tokenizer = Ref("..tokenizer_cfg.build_tokenizer")
 
     def build_dataloader(self, dp_rank=0, dp_size=1):
         vllm_cfg = TinyRLVRVLLMDeployConfig()
@@ -89,11 +90,19 @@ class MathPromptDataConfig(DataConfig):
         model_name_getter = ModelNameGetter(vllm_cfg.model_name_template)
         max_tokens = 1024
         sampling_params = vllm_cfg.get_sampling_params({"max_tokens": max_tokens})
+        tokenizer = self.build_tokenizer()
+        messages = [
+            {
+                "role": "user",
+                "content": "请回答：strawberry里有几个r？请用 \\boxed{...} 给出最终答案。",
+            }
+        ]
+        prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         return FakeGenableGenerator(
             endpoint_getter=endpoint_getter,
             model_name_getter=model_name_getter,
             sampling_params=sampling_params,
-            prompt_text="请回答：strawberry里有几个r？请用 \\boxed{...} 给出最终答案。",
+            prompt_text=prompt_text,
             gt="3",
             max_tokens=max_tokens,
         )
@@ -324,7 +333,6 @@ class Exp(PPOLikeExp):
     def __init__(self):
         super().__init__()
         self.log_dir = "./tensorboard_logs"
-        self.suffix = "qwen3_1p5b_rlvr_math"
 
         self.trainer_cfg.train_iters = 1000
         self.trainer_cfg.global_seq_length = 4096

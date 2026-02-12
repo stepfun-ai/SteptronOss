@@ -86,7 +86,10 @@ class SimpleTrainable(TrainableItem):
 
         predicted = self._extract_boxed(decoded_text)
         is_correct = predicted == self.gt.strip()
-        raw_reward = 1.0 if is_correct else 0.0
+        if finish_reason == "length":
+            raw_reward = 0.0
+        else:
+            raw_reward = 1.0 if is_correct else 0.0
 
         trajectory = prompt_ids + decode_ids
         is_gen_mask = [0] * len(prompt_ids) + [1] * len(decode_ids)
