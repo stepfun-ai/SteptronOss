@@ -10,6 +10,7 @@ from typing import (
     ForwardRef,
     Literal,
     NoReturn,
+    Optional,
 )
 
 import torch
@@ -99,7 +100,7 @@ class MetricConfig(AbstractMetricConfig):
 class TrainerConfig(AbstractTrainerConfig):
     micro_batch_size: int = 1
 
-    train_iters: Optional[int] = None
+    train_iters: int | None = None
 
     offload_optimizer_state: bool = False
 
@@ -474,7 +475,6 @@ class DataConfig(Config):
 
 
 class BaseExp(Config):
-
     resource_cfg: ResourceConfig = ResourceConfig
 
     seed = 1234
