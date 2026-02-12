@@ -20,33 +20,39 @@ Not every interaction needs an improvement pass. But for **key tasks**, do an Im
    - Detailed procedures → `docs/`
 
 ## Memory
+
 ### Code Style
 - Doc style: Config class fields should include a short triple-quote docstring immediately after the attribute definition.
-
 - Config style: follow `configurize` pattern—class attrs declare sub-config types, instance `__init__` sets concrete values and `Ref("..path")` for cross-node links; configs expose `build()`/`build_*`, `sanity_check()`, `to_dict()`.
 - SFT experiment style (`playground/sft/qwen3/*_sft_step3_data.py`): `Exp(BaseExp)` sets `model_cfg`/`data_cfg` as class attrs, tweaks trainer/checkpoint/model fields in `__init__`, and runs with `if __name__ == "__main__": Exp().train()`.
 
-### Existing Utils
-
-- `steptronoss/utils`: `arguments.parse_args` config overrides; `comm_utils` Redis rendezvous/queue + `LocalFuture`/`RemoteFuture`; `dist_utils` broadcast/all_to_all helpers, dict<->tensor packing, list balancing; `general` numeric helpers, list split/balance, RNG fork, retry, recur_to, git hash; `logger` rank-aware log + `StepWriter`; `metrics` Metric/Avg/Percentage/Histogram/Text/GradNorm and `GlobalMetrics`; `optimizable` decorator + `set_optimization`; `utils` model unwrap, param norm, mem report, layer map, jsonl/msgpack IO, generic load; `weight_loader` HF safetensors key mapping/merge.
-- Checkpoint reshape: `steptronoss/checkpointing/reshape_ops.py` provides `ReshapeOp` primitives (e.g., `VocabPad`, `ColumnParallel`/`RowParallel`, `KeepThisTP/EP`, `GQAMergeQKV`, `FFNMergeGateUp`, `UnbindMoE`, `Rename`, `Inverse`) and `OnlineReshaper` + `Script` to map HF ↔ ST keys. Usage pattern in `steptronoss/model/qwen_dense.py`: `build_reshaper()` builds a list of `Script(src=..., op=..., dst=...)` and returns `OnlineReshaper(scripts)`. New ops: implement `forward` (HF→ST piece) + `backward` (ST→HF), compose with `+` (Sequential), and use `Script` patterns to select keys.
-
-- Muon optimizer: use `MuonConfig.mark_muon_params(model)`; it uses config fields to set `param.is_muon_param` before grouping.
-- Muon in experiments: override `optimizer_cfg` with a `GradientManagerConfig` subclass that sets `optimizer_cfg = MuonConfig` (keeps configurize pattern); leave distributed optimizer on but avoid byte-level sharding.
-### Local Priors
-
+### Repo Layout & Utilities
 - Repo layout: core package under `steptronoss/` (core, model, data, exp, optimizer, generation, tokenizer, utils, checkpointing); experiments live in `playground/`; tests in `tests/`.
-- RLVR Genable note: `TrainableItem` objects should not pickle/serialize tokenizer instances; override `__getstate__` to drop the tokenizer and rehydrate elsewhere.
-- RLVR resume note: `model_name` includes `exp_id` and changes per run; persist only a template (e.g., `deployed-model-{EXP_ID}`) so resume works across exp_id changes.
-- Parallel state: global `PM` in `steptronoss.core.parallel_state` is a `ParallelManager`. Typical flow: `PM.initialize()` → `PM.set_mesh(parallel_cfg)` (or `with PM.use_mesh(parallel_cfg): ...`) where `parallel_cfg.build_parallel()` returns `{name: ranks}`. Helpers: `PM.define_parallel(pattern, **sizes)` to build rank grids; `PM.size_of("TP")`, `PM.rank_in("DP")`, `PM.group_of("PP")`, `PM.ranks_of("EP")`. VPP uses `virtual_pipeline_model_parallel_size` + `get_vpp_rank()/set_vpp_rank()`.
+- `steptronoss/utils`: `arguments.parse_args` config overrides; `comm_utils` Redis rendezvous/queue + `LocalFuture`/`RemoteFuture`; `dist_utils` broadcast/all_to_all helpers, dict<->tensor packing, list balancing; `general` numeric helpers, list split/balance, RNG fork, retry, recur_to, git hash; `logger` rank-aware log + `StepWriter`; `metrics` Metric/Avg/Percentage/Histogram/Text/GradNorm and `GlobalMetrics`; `optimizable` decorator + `set_optimization`; `utils` model unwrap, param norm, mem report, layer map, jsonl/msgpack IO, generic load; `weight_loader` HF safetensors key mapping/merge.
+
+### Experiments & Configs
 - Exp/module definitions: `steptronoss/exp` provides abstract `*Config` interfaces (`build_*`/`get_trainer_cls`) and concrete configs in `base_exp.py` (GradientManagerConfig, TrainerConfig data-source gating + sync broadcast, ParallelConfig w/ TP/PP/DP/CP/EP/ETP groups, MegatronTP/PP/3D configs). Ready-made exps: `PretrainExp`/`NTPTrainerConfig` + metrics in `ntp.py`, `SFTExp`/`SFTDataConfig` in `sft.py`, inference configs in `inference.py` (VLLMInferenceConfig, InferencableModelConfig), plus `AdamConfig`, LR schedulers (Constant/Linear/Cosine), and checkpoint config (Save/LoadOptions, CheckpointConfig). New modules follow: subclass config → implement `build_*`/`get_trainer_cls` → wire into `Exp` as class attrs with `Ref(...)` links.
 - Pretrain config notes: pretrain configs live under `playground/pretrain/`; `step3p5_flash.py` defines the Qwen3 config used in recent edits.
 - Pretrain edit guardrails: when translating a full `ModelConfig` into `step3p5_flash.py`, update only existing attributes; some keys map indirectly (e.g., `disable_qk_norm` ↔ `use_qk_norm` inverted, `use_swiglu_limit` ↔ `swiglu_limit`). If you change `num_layers`, keep any layer-wise lists in sync (e.g., `qk_rope_head_dim`, `rope_theta`, `use_fused_qknorm_and_rope`, `use_swiglu_limit`/`use_swiglu_limit_shared`).
-- Tooling note: `rg` may be unavailable in this environment; fall back to `find`/`grep` for repo-wide search.
 - Experiment sanity: after creating/modifying a new experiment, run configurize `cfshow` to view the Config Tree; it also validates imports and runs `sanity_check()` with should be 'OK'. This usually requires activating the StepTron venv (typically `./.venv/`). You also need to run `mypy new_exp.py` to check your code.
 - Experiment diff: `cfshow` can compare two experiments; after creating experiment B based on experiment A, always use `cfshow` diff to verify the changes.
+
+### Parallel & Checkpointing
+- Parallel state: global `PM` in `steptronoss.core.parallel_state` is a `ParallelManager`. Typical flow: `PM.initialize()` → `PM.set_mesh(parallel_cfg)` (or `with PM.use_mesh(parallel_cfg): ...`) where `parallel_cfg.build_parallel()` returns `{name: ranks}`. Helpers: `PM.define_parallel(pattern, **sizes)` to build rank grids; `PM.size_of("TP")`, `PM.rank_in("DP")`, `PM.group_of("PP")`, `PM.ranks_of("EP")`. VPP uses `virtual_pipeline_model_parallel_size` + `get_vpp_rank()/set_vpp_rank()`.
+- Checkpoint reshape: `steptronoss/checkpointing/reshape_ops.py` provides `ReshapeOp` primitives (e.g., `VocabPad`, `ColumnParallel`/`RowParallel`, `KeepThisTP/EP`, `GQAMergeQKV`, `FFNMergeGateUp`, `UnbindMoE`, `Rename`, `Inverse`) and `OnlineReshaper` + `Script` to map HF ↔ ST keys. Usage pattern in `steptronoss/model/qwen_dense.py`: `build_reshaper()` builds a list of `Script(src=..., op=..., dst=...)` and returns `OnlineReshaper(scripts)`. New ops: implement `forward` (HF→ST piece) + `backward` (ST→HF), compose with `+` (Sequential), and use `Script` patterns to select keys.
+
+### RLVR Notes
+- RLVR Genable note: `TrainableItem` objects should not pickle/serialize tokenizer instances; override `__getstate__` to drop the tokenizer and rehydrate elsewhere.
+- RLVR resume note: `model_name` includes `exp_id` and changes per run; persist only a template (e.g., `deployed-model-{EXP_ID}`) so resume works across exp_id changes.
+
+### Optimization (Muon)
+- Muon optimizer: use `MuonConfig.mark_muon_params(model)`; it uses config fields to set `param.is_muon_param` before grouping.
+- Muon in experiments: override `optimizer_cfg` with a `GradientManagerConfig` subclass that sets `optimizer_cfg = MuonConfig` (keeps configurize pattern); leave distributed optimizer on but avoid byte-level sharding.
+- Muon tests: prefer composing existing reshape ops (e.g., `ColumnParallel() + KeepThisTP()`) instead of adding custom ReshapeOp classes or modifying `muon.py`.
+
+### Tests & Tooling
+- Tooling note: `rg` may be unavailable in this environment; fall back to `find`/`grep` for repo-wide search.
 - Test running note: `python` may be missing and `python3` may not have `pytest` installed; use project tooling if available.
 - GPU note: this environment has no worker/GPU access; avoid running GPU-only tests here.
 - Tests note: `@pytest.mark.node2` tests should be marked non-parallel with `pytest.mark.xdist_group("torchrun")` (see `tests/test_moe_layers.py` pattern).
 - Test organization: single-node GPU tests live in `tests/test_muon_optimizer.py`; 2-node GPU tests live in `tests/test_muon_optimizer_node2.py`.
-- Muon tests: prefer composing existing reshape ops (e.g., `ColumnParallel() + KeepThisTP()`) instead of adding custom ReshapeOp classes or modifying `muon.py`.
