@@ -13,12 +13,12 @@ class CkptOptions(Config):
     options.all(but=['optimizer']) for NOT load optimizer only.
     """
 
-    def all(self, but: list[str] = []) -> "CkptOptions":
+    def all(self, but: list[str] = []) -> CkptOptions:
         for k, _ in self.items():
             setattr(self, k, k not in but)
         return self
 
-    def none(self, but: list[str] = []) -> "CkptOptions":
+    def none(self, but: list[str] = []) -> CkptOptions:
         for k, _ in self.items():
             setattr(self, k, k in but)
         return self

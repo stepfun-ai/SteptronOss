@@ -142,7 +142,7 @@ class VLLMClient:
         result = await self.aget(f"{self._router_addr}/get_info")
         return [ep["endpoint"] for ep in result]
 
-    async def _update_and_reload_for_endpoint(self, endpoint: str, new_path: str = None) -> dict[str, Any]:
+    async def _update_and_reload_for_endpoint(self, endpoint: str, new_path: str | None = None) -> dict[str, Any]:
         """为特定端点执行更新配置和重新加载权重的任务组合"""
         overrides = {
             "load_config": {"load_format": "auto"},
@@ -169,7 +169,7 @@ class VLLMClient:
         await self.apost(f"http://{endpoint}/reset_prefix_cache", decode_json=False)
         return True
 
-    async def _update_all_workers(self, endpoints: list[str], new_path: str = None):
+    async def _update_all_workers(self, endpoints: list[str], new_path: str | None = None):
         tasks = [
             self._update_and_reload_for_endpoint(
                 endpoint,
@@ -180,7 +180,7 @@ class VLLMClient:
         results = await asyncio.gather(*tasks)
         return all(results)
 
-    def reload_weights(self, new_path: str = None):
+    def reload_weights(self, new_path: str | None = None):
         endpoints = self.wait_for_server()
 
         try:

@@ -43,7 +43,7 @@ class ResourceConfig(Config):
     envs: dict[str, str] = {}
     """NOTE: Combined with ResourceConfig.envs (union) as the final envs"""
 
-    image: Optional[str] = None
+    image: str | None = None
     """Specify docker image, none for no image."""
 
     command: str
@@ -83,7 +83,6 @@ class ResourceConfig(Config):
         for task_name, task_spec in all_task_specs.items():
             task_spec["envs"] = self.envs | task_spec.get("envs", {})
             with self.modify(**task_spec):
-
                 task_cfg: ResourceConfig = self.__class__()
                 for k, v in self.items():
                     if k != "task_specs":
@@ -118,7 +117,7 @@ class ResourceConfig(Config):
                         raise RuntimeError(f"Conflict sub-task name '{k}' in {prefix} and {found_names[k]}!")
                     found_names[k] = prefix
                     found_specs[k] = v
-            for k, v in node.items():
+            for _k, v in node.items():
                 if isinstance(v, Config):
                     recur_find_task_specs(v)
 

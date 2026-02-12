@@ -78,7 +78,7 @@ class GradientManager(ABC):
         self.optimizer = optimizer
 
         self.build_buffer()
-        for bucket_key, buffer in self._grad_buffers.items():
+        for bucket_key, _buffer in self._grad_buffers.items():
             logger.info(f"Gradbuffer: {bucket_key}, dp_world_size: {PM.size_of(bucket_key.allreduce_group)}")
 
         # We need to store them so they don't go out of scope.

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 from collections import defaultdict
-from typing import Any, Callable, ForwardRef, Literal, Optional, TypedDict
+from collections.abc import Callable
+from typing import Any, ForwardRef, Literal, Optional, TypedDict
 
 import torch
 from configurize import Config, DataClass, Ref
@@ -51,7 +52,7 @@ class EnvTrajectory(DataClass):
     trajectory: torch.LongTensor | list[int] = None
     "Prompt+Generated, Long, (St, )"
 
-    logprobs: Optional[torch.FloatTensor | list[float]] = None
+    logprobs: torch.FloatTensor | list[float] | None = None
     "Sample Logprob for Generated, Float32, (Sr, )"
 
     is_gen_mask: torch.BoolTensor | list[int | bool] = None
@@ -186,8 +187,8 @@ class PackedPPOSamples(DataClass):
 
 class RoleCheckpointConfig(Config):
     load_path: str = None
-    load_safetensors: Optional[bool | str] = None
-    strict_load_model: Optional[bool]
+    load_safetensors: bool | str | None = None
+    strict_load_model: bool | None
     load_option = LoadOptions
     save_option = SaveOptions
 
@@ -463,10 +464,10 @@ class FlowControllerConfig(Config):
     prompt_per_iter: int
     """Number of prompts scheduled per training iteration."""
 
-    max_untrained_prompts: Optional[int] = None
+    max_untrained_prompts: int | None = None
     """Max pending prompts for fully-async flow control."""
 
-    max_staleness: Optional[int] = None
+    max_staleness: int | None = None
     """Max staleness steps for fully-async flow control."""
 
     def sanity_check(self):
@@ -569,13 +570,13 @@ class PPOLikeTrainerConfig(TrainerConfig):
     def sanity_check(self):
         super().sanity_check()
         if self.skip_forward_reference:
-            assert (
-                self.ref_kl_loss_coeff == 0 and self.ref_kl_penalty_coeff == 0
-            ), "Cannot skip get_ref_logprob when need KL regulation."
+            assert self.ref_kl_loss_coeff == 0 and self.ref_kl_penalty_coeff == 0, (
+                "Cannot skip get_ref_logprob when need KL regulation."
+            )
         if self.skip_forward_actor:
-            assert (
-                self.fix_iters == 1 and self.actor_epoch == 1 or self.use_offpolicy_without_is
-            ), "Cannot skip get_actor_logprob when fix_iters != 1 or actor_epoch != 1 (off-policy setting) except use_offpolicy_without_is."
+            assert (self.fix_iters == 1 and self.actor_epoch == 1) or self.use_offpolicy_without_is, (
+                "Cannot skip get_actor_logprob when fix_iters != 1 or actor_epoch != 1 (off-policy setting) except use_offpolicy_without_is."
+            )
 
         assert self.offload_optimizer_state in [True, False, "momentum"]
         all_supported_keys = PPOSample()._defined_attributes
@@ -587,9 +588,9 @@ class PPOLikeTrainerConfig(TrainerConfig):
                 )
         # for wandb
         if "wandb" in self.writer_backend:
-            assert (
-                os.getenv("WANDB_API_KEY") is not None
-            ), "writer_backend including wandb, but WANDB_API_KEY is not set"
+            assert os.getenv("WANDB_API_KEY") is not None, (
+                "writer_backend including wandb, but WANDB_API_KEY is not set"
+            )
 
     def is_data_source(self):
         # for PPO fw/fwbw, each TP hold same data
@@ -613,7 +614,7 @@ class PPOLikeTrainerConfig(TrainerConfig):
             vpp_size = get_vpp_size()
             with timeit("broadcast-tensors-pp", log_level=2):
                 if vpp_rank == 0:
-                    pp_sync_data = [data.__class__] + [data.get(k, None) for k in self.global_data_keys]
+                    pp_sync_data = [data.__class__] + [data.get(k) for k in self.global_data_keys]
                     pp_sync_data = broadcast_tensors(
                         pp_sync_data,
                         src_rank=PM.ranks_of("PP")[0],
@@ -795,13 +796,13 @@ class PPOLikeTrainerConfig(TrainerConfig):
 
         if PM.world_rank == 0:
             for p, r in prompt_rewards_cur.items():
-                if all([rr >= 1.0 for rr in r]):
+                if all(rr >= 1.0 for rr in r):
                     GlobalMetrics.correctness.add(1.0, "all_accept")
                     GlobalMetrics.correctness_subclass.add(1.0, f"all_accept/{prompt_env_cur[p]}")
-                elif all([rr <= 0.0 for rr in r]):
+                elif all(rr <= 0.0 for rr in r):
                     GlobalMetrics.correctness.add(1.0, "all_fail")
                     GlobalMetrics.correctness_subclass.add(1.0, f"all_fail/{prompt_env_cur[p]}")
-                elif any([rr >= 1.0 for rr in r]):
+                elif any(rr >= 1.0 for rr in r):
                     ## 对每个prompt的全部response，非全对/非全错，但是有至少一个全对
                     GlobalMetrics.correctness.add(1.0, "some_accept")
                     GlobalMetrics.correctness_subclass.add(1.0, f"some_accept/{prompt_env_cur[p]}")
@@ -825,7 +826,6 @@ class PPOLikeTrainerConfig(TrainerConfig):
         def compute_logprob_diff_max(samples: list[PackedPPOSamples]):
             diffs = []
             for sample in samples:
-                mask = sample.is_gen_mask[0]
                 diffs.append((sample.actor_logprobs - sample.logprobs).abs().max())
             return torch.tensor(diffs).max()
 
@@ -861,9 +861,9 @@ class PPOLikeTrainerConfig(TrainerConfig):
                 GlobalMetrics.sampling_logprob_diff_quantile.add(value, subname=tag)
 
             # Compute and log sampling ratio diff quantiles
-            all_ratio_diffs = torch.cat(
-                [(torch.exp(sample.actor_logprobs - sample.logprobs) - 1.0).abs() for sample in samples]
-            )
+            all_ratio_diffs = torch.cat([
+                (torch.exp(sample.actor_logprobs - sample.logprobs) - 1.0).abs() for sample in samples
+            ])
             ratio_diff_quantiles = compute_quantiles(all_ratio_diffs)
             for tag, value in ratio_diff_quantiles.items():
                 GlobalMetrics.sampling_ratio_diff.add(value, subname=tag)
@@ -894,7 +894,6 @@ class PPOLikeTrainerConfig(TrainerConfig):
 
 
 class PPOLikeExp(BaseExp):
-
     data_cfg: DataConfig
     # actor
     actor_model_cfg: ActorModelConfig
@@ -902,9 +901,9 @@ class PPOLikeExp(BaseExp):
     actor_grad_manager_cfg: GradientManagerConfig
 
     # critic
-    critic_model_cfg: Optional[CriticModelConfig] = None
-    critic_scheduler_cfg: Optional[SchedulerConfig] = None
-    critic_grad_manager_cfg: Optional[GradientManagerConfig] = None
+    critic_model_cfg: CriticModelConfig | None = None
+    critic_scheduler_cfg: SchedulerConfig | None = None
+    critic_grad_manager_cfg: GradientManagerConfig | None = None
 
     checkpoint_cfg: PPOCheckpointCfg
 

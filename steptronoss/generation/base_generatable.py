@@ -8,7 +8,7 @@ from steptronoss.utils.utils import get_exp_id
 
 # Abstract
 class GenableItem(ABC):
-    def __init__(self, meta: dict = None) -> None:
+    def __init__(self, meta: dict | None = None) -> None:
         self.meta: dict = meta or {}
 
     @abstractmethod
@@ -17,7 +17,6 @@ class GenableItem(ABC):
 
 
 class TrainableItem(GenableItem):
-
     @abstractmethod
     async def generate_for_train(self) -> list[EnvTrajectory]:
         pass

@@ -92,7 +92,7 @@ def format_layermap(layermap: dict) -> str:
     """Format a nested layermap dict with collapsed consecutive ranges."""
 
     def _is_int_dict(d: dict) -> bool:
-        return isinstance(d, dict) and d and all(isinstance(k, int) for k in d.keys())
+        return isinstance(d, dict) and d and all(isinstance(k, int) for k in d)
 
     def _is_pp_vp_dict(d: dict) -> bool:
         if not _is_int_dict(d):

@@ -13,7 +13,7 @@ class TimedRunner:
     def reset(self, *exc_info):
         try:
             # Use kill instead of terminate for stubborn processes
-            for pid, proc in self.executor._processes.items():
+            for _pid, proc in self.executor._processes.items():
                 try:
                     proc.kill()  # More forceful than terminate
                 except:
@@ -35,19 +35,15 @@ class TimedRunner:
 
         try:
             future = self.executor.submit(func, *args, **kwargs)
-            done, not_done = wait(
-                {future}, timeout=timeout, return_when=FIRST_EXCEPTION
-            )
+            done, not_done = wait({future}, timeout=timeout, return_when=FIRST_EXCEPTION)
         except:
-            logger.warning(f"Executor broken, reset executor...")
+            logger.warning("Executor broken, reset executor...")
             self.reset()
             future = self.executor.submit(func, *args, **kwargs)
-            done, not_done = wait(
-                {future}, timeout=timeout, return_when=FIRST_EXCEPTION
-            )
+            done, not_done = wait({future}, timeout=timeout, return_when=FIRST_EXCEPTION)
 
         if not_done:
-            logger.warning(f"Executor timeout, reset executor...")
+            logger.warning("Executor timeout, reset executor...")
             self.reset()
             raise TimeoutError(f"Runner timeout after {timeout} seconds")
 

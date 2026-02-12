@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import gc
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 

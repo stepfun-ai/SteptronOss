@@ -54,10 +54,12 @@ def repeatness_score(s: str):
     c, sa = suffixArray(arr)
     cnt = sum(lcp(arr, sa, c))
 
-    return (cnt * 2 / (n * (n + 1)))
+    return cnt * 2 / (n * (n + 1))
+
 
 def repeatness(s: str):
     return repeatness_score(s) > 0.2
+
 
 SUBSTITUTIONS = [
     ("an ", ""),
@@ -170,23 +172,21 @@ def _is_latex_equal(str1, str2):
             return True
         else:
             raise ValueError
-    except Exception:  # noqa
+    except Exception:
         try:
             norm1, norm2 = normalize_final_answer(str1), normalize_final_answer(str2)
             sym1, val1 = latex_eval(norm1)
             sym2, val2 = latex_eval(norm2)
             if sym1 == sym2 or val1 == val2:
                 return True
-        except Exception:  # noqa
+        except Exception:
             return norm1 == norm2
     return False
 
 
 def is_latex_equal(str1, str2, math_mode="legacy"):
     if math_mode == "legacy":
-        if (len(str1) > 128 and repeatness(str1)) or (
-            len(str2) > 128 and repeatness(str2)
-        ):
+        if (len(str1) > 128 and repeatness(str1)) or (len(str2) > 128 and repeatness(str2)):
             return False
 
         try:
@@ -216,7 +216,7 @@ def _fix_fracs(string):
             else:
                 try:
                     assert len(substr) >= 2
-                except Exception:  # noqa
+                except Exception:
                     return string
                 a = substr[0]
                 b = substr[1]
@@ -244,10 +244,10 @@ def _fix_a_slash_b(string):
     try:
         a = int(a)
         b = int(b)
-        assert string == "{}/{}".format(a, b)
+        assert string == f"{a}/{b}"
         new_string = "\\frac{" + str(a) + "}{" + str(b) + "}"
         return new_string
-    except Exception:  # noqa
+    except Exception:
         return string
 
 
@@ -313,7 +313,7 @@ def _strip_string(string):
 
     # remove percentage
     string = string.replace("\\%", "")
-    string = string.replace("\%", "")
+    string = string.replace(r"\%", "")
 
     # " 0." equivalent to " ." and "{0." equivalent to "{." Alternatively, add "0" if "." is the start of the string
     string = string.replace(" .", " 0.")
@@ -362,9 +362,9 @@ def is_equiv(str1, str2, verbose=False) -> bool:
             print(ss1, ss2)
         try:
             return float(ss1) == (float(ss2))
-        except Exception:  # noqa
+        except Exception:
             return ss1 == ss2
-    except Exception:  # noqa
+    except Exception:
         return str1 == str2
 
 

@@ -5,7 +5,6 @@ from configurize import Config, Ref
 
 
 class BaseInferenceConfig(Config):
-
     max_seq_len: int = 65536
     """Length of total seqlen in inferengine (prefill + decode)"""
     max_decode_steps: int = None
@@ -129,7 +128,7 @@ class VLLMDeployConfig(BaseInferenceConfig):
         envs = {}
 
         cmd = [
-            f"vllm serve",
+            "vllm serve",
             f"{self.model_config_path}",
             "--port $PORT_SERVING",
             f"--served-model-name {self.model_name}",
@@ -145,7 +144,7 @@ class VLLMDeployConfig(BaseInferenceConfig):
         if self.vllm_hf_overrides:
             overrides = json.dumps(self.vllm_hf_overrides)
             envs["HF_OVERRIDES"] = f"'{overrides}'"
-            cmd.append(f"--hf-overrides $HF_OVERRIDES")
+            cmd.append("--hf-overrides $HF_OVERRIDES")
         if self.tokenizer_path:
             cmd.append(f"--tokenizer {self.tokenizer_path}")
         if self.vllm_trust_remote_code:
@@ -176,12 +175,10 @@ class VLLMDeployConfig(BaseInferenceConfig):
         if self.enable_expert_parallel:
             cmd.append("--enable-expert-parallel")
         if self.vllm_mtp_num_tokens > 0:
-            vllm_speculative_config = json.dumps(
-                {
-                    "num_speculative_tokens": self.vllm_mtp_num_tokens,
-                    "method": self.vllm_mtp_method,
-                }
-            )
+            vllm_speculative_config = json.dumps({
+                "num_speculative_tokens": self.vllm_mtp_num_tokens,
+                "method": self.vllm_mtp_method,
+            })
             envs["SPECULATIVE_CONFIG"] = f"'{vllm_speculative_config}'"
             cmd.append("--speculative-config $SPECULATIVE_CONFIG")
 

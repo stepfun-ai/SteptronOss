@@ -8,7 +8,7 @@ import pickle
 import time
 from os.path import join
 from threading import Thread
-from typing import TYPE_CHECKING, Callable, Optional, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import torch
 import torch.distributed as dist
@@ -57,7 +57,6 @@ class CheckpointDict(TypedDict):
 
 
 class Checkpointer:
-
     def __init__(self):
         self.dump_tasks: list[tuple] = []
 
@@ -67,7 +66,7 @@ class Checkpointer:
         self,
         file_objects: FileObjects,
         save_path: str,
-        mark_latest: tuple[str, str] = None,
+        mark_latest: tuple[str, str] | None = None,
         async_dump: bool = True,
     ):
         """
@@ -121,11 +120,11 @@ class Checkpointer:
     def make_ckpt(
         self,
         cfg: CheckpointConfig,
-        model: list[MegatronModule] = None,
-        optimizer: GradientManager = None,
-        scheduler: Scheduler = None,
+        model: list[MegatronModule] | None = None,
+        optimizer: GradientManager | None = None,
+        scheduler: Scheduler | None = None,
         dataloader: object = None,
-        extra_info: Optional[dict] = {},
+        extra_info: dict | None = {},
     ) -> FileObjects:
 
         file_dicts: FileObjects = {}
@@ -144,7 +143,7 @@ class Checkpointer:
                     else:
                         for i in range(len(model)):
                             set_vpp_rank(i)
-                            model_state_dict["model%d" % i] = model[i].state_dict()
+                            model_state_dict[f"model{i}"] = model[i].state_dict()
 
         model_state_dict["extra"] = recur_to_allowed_types(extra_info)
         # RNG states.
@@ -177,7 +176,7 @@ class Checkpointer:
     def dump_ckpt(
         self,
         cfg: CheckpointConfig,
-        iter_path: Optional[str] = None,
+        iter_path: str | None = None,
         sub_name="",
         mark_latest=True,
         # objects
@@ -186,7 +185,7 @@ class Checkpointer:
         optimizer=None,
         opt_param_scheduler=None,
         dataloader=None,
-        extra_info: Optional[dict] = None,
+        extra_info: dict | None = None,
     ):
         """
         Async save a model checkpoint. Return the handle of thread or None.
@@ -289,7 +288,7 @@ class Checkpointer:
                 # we all use dp0
                 if smart_exists(optim_path) and not no_optim:
                     this_rank_data.update(load(optim_path))
-            dp_0_data = {k: v for k, v in this_rank_data.items()}
+            dp_0_data = dict(this_rank_data)
         else:
             # dp x load own, meta only
             this_rank_data = {}
@@ -403,7 +402,7 @@ class Checkpointer:
 
         # Model.
         logger.info(f"Loading modules from {path}...", at=0)
-        logger.info(f"([required] [in_ckpt])", at=0)
+        logger.info("([required] [in_ckpt])", at=0)
         model_exists = "model" in this_rank_data or "model0" in this_rank_data
         logger.info(
             f"model: [{'√' if cfg.load_option.model else '×'}] [{'√' if model_exists else '×'}]",
@@ -478,7 +477,7 @@ class Checkpointer:
     def _dump_with_callback(
         file_objects: FileObjects,
         save_path: str,
-        mark_latest: tuple[str, str] = None,
+        mark_latest: tuple[str, str] | None = None,
     ):
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         rank = dist.get_rank() if dist.is_initialized() else 0
@@ -499,7 +498,7 @@ class Checkpointer:
         successes = [f for f in smart_listdir(save_path) if f.endswith(".success")]
         logger.info(f"Finished uploading: [{len(successes)} / {world_size}]", at=0)
         if len(successes) == world_size:
-            logger.info(f"All Rank Finished!", at="all")
+            logger.info("All Rank Finished!", at="all")
             if mark_latest:
                 mark_dir, latest_path = mark_latest
                 latest_tmp = join(mark_dir, f"latest_ckpt.rank{PM.world_rank}")

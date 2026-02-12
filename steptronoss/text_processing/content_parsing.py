@@ -37,4 +37,3 @@ def parse_reason_solution(response: str) -> str:
         if len(eoa_splits) > 1:
             return eoa_splits[0]
     return ""
-

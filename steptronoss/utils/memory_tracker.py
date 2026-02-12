@@ -56,7 +56,7 @@ class MemoryRecord(TypedDict):
 
 def _get_cpu_rss_bytes() -> float:
     try:
-        with open("/proc/self/status", "r", encoding="utf-8") as handle:
+        with open("/proc/self/status", encoding="utf-8") as handle:
             for line in handle:
                 if line.startswith("VmRSS:"):
                     parts = line.split()
@@ -75,7 +75,7 @@ class CudaMemoryTracker:
     def __init__(self):
         self.tracks: list[MemoryRecord] = []
 
-    def mark(self, mark: str = None):
+    def mark(self, mark: str | None = None):
         if os.getenv("MEM_DIAGNOSE") is None:
             return
         if mark is None:
@@ -148,7 +148,7 @@ class CudaMemoryTracker:
                 lines.append(
                     "  "
                     f"{prev['mark']} -> {curr['mark']} "
-                    f"({ _fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
+                    f"({_fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
                     f"delta={_fmt_bytes(delta)}"
                 )
         else:
@@ -158,7 +158,7 @@ class CudaMemoryTracker:
         top_cpu_positions = sorted(self.tracks, key=lambda x: x["cpu_rss"], reverse=True)[:topk]
         lines.append(f"Top{topk} CPU memory positions (rss):")
         for rec in top_cpu_positions:
-            lines.append("  " f"{rec['mark']} @ {_fmt_time(rec['time'])} " f"rss={_fmt_bytes(rec['cpu_rss'])}")
+            lines.append(f"  {rec['mark']} @ {_fmt_time(rec['time'])} rss={_fmt_bytes(rec['cpu_rss'])}")
 
         # Topk CPU deltas between consecutive marks.
         if len(self.tracks) >= 2:
@@ -176,7 +176,7 @@ class CudaMemoryTracker:
                 lines.append(
                     "  "
                     f"{prev['mark']} -> {curr['mark']} "
-                    f"({ _fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
+                    f"({_fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
                     f"delta={_fmt_bytes(delta)}"
                 )
         else:
@@ -244,7 +244,7 @@ class CudaMemoryTracker:
                     lines.append(
                         "  "
                         f"{prev['mark']} -> {curr['mark']} "
-                        f"({ _fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
+                        f"({_fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
                         f"delta={_fmt_bytes(delta)}"
                     )
             else:
@@ -253,7 +253,7 @@ class CudaMemoryTracker:
             top_cpu_positions = sorted(self.tracks, key=lambda x: x["cpu_rss"], reverse=True)[:topk]
             lines.append(f"Top{topk} CPU memory positions (rss):")
             for rec in top_cpu_positions:
-                lines.append("  " f"{rec['mark']} @ {_fmt_time(rec['time'])} " f"rss={_fmt_bytes(rec['cpu_rss'])}")
+                lines.append(f"  {rec['mark']} @ {_fmt_time(rec['time'])} rss={_fmt_bytes(rec['cpu_rss'])}")
 
             if len(self.tracks) >= 2:
                 cpu_deltas: list[tuple[float, int]] = []
@@ -270,7 +270,7 @@ class CudaMemoryTracker:
                     lines.append(
                         "  "
                         f"{prev['mark']} -> {curr['mark']} "
-                        f"({ _fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
+                        f"({_fmt_time(prev['time'])} -> {_fmt_time(curr['time'])}) "
                         f"delta={_fmt_bytes(delta)}"
                     )
             else:
@@ -317,18 +317,12 @@ class CudaMemoryTracker:
             lines.append(f"Top{topk_ranks} ranks with least CPU peak (rss):")
             for rec in gathered_sorted_cpu[:topk_ranks]:
                 lines.append(
-                    "  "
-                    f"rank={rec['rank']} "
-                    f"{rec['mark']} @ {_fmt_time(rec['time'])} "
-                    f"rss={_fmt_bytes(rec['cpu_rss'])}"
+                    f"  rank={rec['rank']} {rec['mark']} @ {_fmt_time(rec['time'])} rss={_fmt_bytes(rec['cpu_rss'])}"
                 )
             lines.append(f"Top{topk_ranks} ranks with most CPU peak (rss):")
             for rec in gathered_sorted_cpu[-topk_ranks:][::-1]:
                 lines.append(
-                    "  "
-                    f"rank={rec['rank']} "
-                    f"{rec['mark']} @ {_fmt_time(rec['time'])} "
-                    f"rss={_fmt_bytes(rec['cpu_rss'])}"
+                    f"  rank={rec['rank']} {rec['mark']} @ {_fmt_time(rec['time'])} rss={_fmt_bytes(rec['cpu_rss'])}"
                 )
         lines.append("=" * 90)
         logger.info("\n".join(lines), at=0)

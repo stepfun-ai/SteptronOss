@@ -1,5 +1,6 @@
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from steptronoss.exp.rl import EnvTrajectory, StopType
 from steptronoss.generation.base_generatable import TrainableItem

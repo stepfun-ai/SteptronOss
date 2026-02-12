@@ -44,7 +44,7 @@ class VLLMController:
         env["PORT_SERVING"] = str(self.vllm_port)
 
         logger.info(f"Launching vLLM with command: {cmd}")
-        self.process = subprocess.Popen(
+        self.process = subprocess.Popen(  # noqa: S602
             cmd,
             shell=True,
             env=os.environ | env | {"VLLM_SERVER_DEV_MODE": "1"},  # must in DEV MODE

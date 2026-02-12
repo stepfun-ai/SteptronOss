@@ -48,7 +48,7 @@ def test_cmt_report_over_world(monkeypatch):
             "time": 0.0,
             "allocated": float(64 * 1024**2),
             "reserved": float(128 * 1024**2),
-            "cpu_rss": float(1111.0),
+            "cpu_rss": 1111.0,
         }
         return [obj, other]
 

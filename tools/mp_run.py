@@ -15,7 +15,7 @@ from steptronoss.utils.general import get_object_from_file
 
 
 def submit_one(command: str, envs: dict[str, str]):
-    worker = Popen(command, shell=True, env=os.environ | envs, preexec_fn=os.setsid)
+    worker = Popen(command, shell=True, env=os.environ | envs, preexec_fn=os.setsid)  # noqa: S602
 
     def send_signal(sig):
         worker.poll()
@@ -76,7 +76,7 @@ class MPRunner:
         spawn_tasks(rsc_cfg=exp.resource_cfg, command=command)
 
     def parse_args(self) -> tuple[argparse.Namespace, list[str]]:
-        example = "Example:\n" "  python tools/mp_run.py exp.py\n"
+        example = "Example:\n  python tools/mp_run.py exp.py\n"
         note = (
             "Note:\n"
             "  Any unrecognized extra arguments will be passed directly to the exp.\n"

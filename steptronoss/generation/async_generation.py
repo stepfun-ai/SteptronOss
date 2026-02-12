@@ -2,8 +2,9 @@ import asyncio
 import multiprocessing as mp
 import threading
 import time
+from collections.abc import Callable, Iterable
 from queue import Empty, Queue
-from typing import Any, Callable, Iterable, NoReturn, Optional
+from typing import Any, NoReturn, Optional
 from uuid import uuid4
 
 from loguru import logger
@@ -47,7 +48,7 @@ class SingleGenerationController:
         for item in gen_items:
             self.input_queue.put((item, lambda a, b: out_queue.put((a, b)), for_train))
 
-        for item in gen_items:
+        for _item in gen_items:
             output = out_queue.get()
             yield output
 
@@ -55,8 +56,8 @@ class SingleGenerationController:
         self,
         genable: TrainableItem,
         for_train=False,
-        callback: Callable[[tuple[TrainableItem, Any]], NoReturn] = None,
-        task_meta: Optional[dict] = None,
+        callback: Callable[[tuple[TrainableItem, Any]], NoReturn] | None = None,
+        task_meta: dict | None = None,
     ) -> NoReturn:
         if callback is None:
             callback = print
@@ -112,7 +113,7 @@ def _generation_worker_process(input_queue: mp.Queue, result_queue: mp.Queue) ->
 
 
 class GenerationController:
-    def __init__(self, num_workers: Optional[int] = None):
+    def __init__(self, num_workers: int | None = None):
         self.num_workers = num_workers or mp.cpu_count()
         self.input_queue = mp.Queue()
         self.result_queue = mp.Queue()
@@ -170,7 +171,7 @@ class GenerationController:
         self,
         genable: TrainableItem,
         for_train: bool = False,
-        callback: Optional[Callable[[tuple[TrainableItem, Any]], NoReturn]] = None,
+        callback: Callable[[tuple[TrainableItem, Any]], NoReturn] | None = None,
     ) -> NoReturn:
         """提交单个任务（支持自定义回调）"""
         if callback is None:

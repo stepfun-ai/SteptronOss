@@ -1,7 +1,8 @@
 import os
 import re
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -130,7 +131,7 @@ def split_state_dict(
     non_expert_state_dict = {k: v for k, v in model_state_dict.items() if not k.startswith("model")}
 
     # Check if model states exist (either "model" or "model0", "model1", etc.)
-    model_keys = [k for k in model_state_dict.keys() if k.startswith("model")]
+    model_keys = [k for k in model_state_dict if k.startswith("model")]
     if not model_keys:
         return expert_state_dict, non_expert_state_dict
 

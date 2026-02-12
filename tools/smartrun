@@ -7,6 +7,7 @@ torchrun --nnodes 2 --nproc-per-node 8 --master-addr xxx --master-port xxx your_
 # with
 NNODES=2 tools/smartrun your_exp.py
 """
+
 import os
 import socket
 import sys
@@ -85,7 +86,7 @@ def DISPATCH_TORCHRUN():
     cmd = cmd[:1] + dist_args + cmd[1:]
     cmd = " ".join(cmd)
     print(f"Modified Command:\n\033[32m{cmd}\033[0m", flush=True)
-    os.system(cmd)
+    os.system(cmd)  # noqa: S605
 
 
 DISPATCH_TORCHRUN()

@@ -82,10 +82,8 @@ class VLLMRouter:
     def serve(self):
         my_ip = get_my_ip()
         my_port = get_free_port()
-        my_info = f"{my_ip}:{my_port}"
 
         exp_redis = get_exp_redis()
-        exist_info = exp_redis.get(f"VLLM_ROUTER_ADDR_PORT_{self.cfg.router_addr_key}")
         # if exist_info is not None and exist_info.decode() != my_info:
         #     raise RuntimeError("It seems an VLLM router has already running!")
         exp_redis.set(f"VLLM_ROUTER_ADDR_PORT_{self.cfg.router_addr_key}", f"{my_ip}:{my_port}")

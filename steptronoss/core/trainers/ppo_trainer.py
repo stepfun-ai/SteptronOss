@@ -148,7 +148,6 @@ class PPOTrainer(BaseTrainer):
         self.timers("interval-time", log_level=-1).start(barrier=True)
 
         while self.iteration < self.exp.trainer_cfg.train_iters:
-
             for hook in self._before_step_hooks:
                 hook(self)
 
@@ -299,6 +298,7 @@ class PPOTrainer(BaseTrainer):
 
         Data residency: samples are per-DP (each DP holds different data).
         """
+
         # fmt: off
         def hacked_loss_fn(samples: PackedPPOSamples, logits: torch.Tensor):
             logits: torch.Tensor  # S, B, V
@@ -331,6 +331,7 @@ class PPOTrainer(BaseTrainer):
 
         Data residency: samples are per-DP (each DP holds different data).
         """
+
         # fmt: off
         def hacked_loss_fn(samples: PackedPPOSamples, logits: torch.Tensor):
             logits: torch.Tensor  # S, B, V
@@ -380,9 +381,9 @@ class PPOTrainer(BaseTrainer):
             if cp_size > 1:
                 ragged_values = gather_from_balanced_cp_region(ragged_values, dim=0)
                 # Shape verification
-                assert (
-                    ragged_values.shape[0] == samples.cu_seqlens[-1].item()
-                ), f"Shape mismatch: values={ragged_values.shape[0]}, expected={samples.cu_seqlens[-1].item()}"
+                assert ragged_values.shape[0] == samples.cu_seqlens[-1].item(), (
+                    f"Shape mismatch: values={ragged_values.shape[0]}, expected={samples.cu_seqlens[-1].item()}"
+                )
 
             self.ppo_cfg.get_advantage_and_returns(ragged_samples=samples, ragged_values=ragged_values)
 
@@ -425,7 +426,7 @@ class PPOTrainer(BaseTrainer):
         return data
 
     def chunk_my_samples(
-        self, my_samples: list[PackedPPOSamples], fix_iters: int = None
+        self, my_samples: list[PackedPPOSamples], fix_iters: int | None = None
     ) -> list[list[PackedPPOSamples]]:
         assert fix_iters
         min_chunk_size = PM.size_of("PP") if get_vpp_size() > 1 else 1
@@ -446,7 +447,7 @@ class PPOTrainer(BaseTrainer):
 
         self.ppo_cfg.log_reward_metrics(all_samples)
 
-        logger.info(f"Start filter sampels after reward_fn calc", at=-1)
+        logger.info("Start filter sampels after reward_fn calc", at=-1)
         all_samples = self.exp.trainer_cfg.filter_samples(all_samples)
 
         CMT.mark("before_packing")
@@ -456,7 +457,7 @@ class PPOTrainer(BaseTrainer):
         logger.info(f"Get {len(my_samples)} packed-samples for each DP.", at=-1)
         CMT.mark("after_packing")
 
-        logger.info(f"Forward Reference and Actor...", at=-1)
+        logger.info("Forward Reference and Actor...", at=-1)
 
         # Only skip reference if all of the following are False: KL penalty, KL loss, and log_logprobs.
         if not self.ppo_cfg.skip_forward_reference:
@@ -475,7 +476,7 @@ class PPOTrainer(BaseTrainer):
 
         self.critic.backload_model()
         if not self.ppo_cfg.onvalue_gae:
-            logger.info(f"Forward Critic...", at=-1)
+            logger.info("Forward Critic...", at=-1)
             my_samples = self.get_values_advantages(my_samples)
             CMT.mark("after_get_values_advantages")
 
@@ -521,10 +522,9 @@ class PPOTrainer(BaseTrainer):
 
         if self.ppo_cfg.onvalue_gae:
             # actor data must be subset of critic data!
-            my_samples = sum(
-                [self.make_div_pp(iter_data) for iter_data in critic_chunks],
-                [],
-            )
+            my_samples = []
+            for iter_data in critic_chunks:
+                my_samples.extend(self.make_div_pp(iter_data))
 
         # normalize advantages
         with self.timers.record("normalize_advantages", log_level=1):
@@ -686,7 +686,6 @@ class PPOTrainer(BaseTrainer):
         CMT.mark("after_build_actor")
 
         with timeit("build_critic_model"):
-
             if self.exp.critic_model_cfg is not None:
                 with cfg.modify(**cfg.critic):
                     state_dicts = self.load_checkpoint()

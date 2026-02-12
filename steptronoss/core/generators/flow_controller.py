@@ -51,7 +51,6 @@ class FlowController(metaclass=ABCMeta):
 
 
 class SimpleFlowController(FlowController):
-
     def __init__(self, flow_cfg: FlowControllerConfig):
         self.cfg = flow_cfg
         assert self.cfg.async_strategy in ["on-policy", "one-step-off"]
@@ -61,7 +60,7 @@ class SimpleFlowController(FlowController):
 
         self.yielded_but_not_acked_train_samples = []
 
-    def start(self, dataloader: Nextable, model: torch.nn.Module, state_dict: Optional[dict] = None):
+    def start(self, dataloader: Nextable, model: torch.nn.Module, state_dict: dict | None = None):
         self.model = model
         if PM.world_rank == 0:
             self.vllm_client = self.cfg.vllm_cfg.build_cli()
@@ -126,7 +125,7 @@ class SimpleFlowController(FlowController):
                 with self.flow.lock:
                     self.flow["pre_gen"].put(PersistentFlow.Signal("need_version", version=version))
 
-                    for i in range(self.cfg.prompt_per_iter):
+                    for _i in range(self.cfg.prompt_per_iter):
                         self.flow["pre_gen"].put(self.flow["source"].pop())
 
                     self.flow["pre_gen"].put(PersistentFlow.Signal("train"))
