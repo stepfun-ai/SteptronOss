@@ -7,8 +7,8 @@ import shutil
 import threading
 import time
 from collections import OrderedDict, defaultdict, deque
-from functools import lru_cache
-from typing import Any, Tuple
+from functools import lru_cache, reduce
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -116,7 +116,7 @@ class RaggedPPOSampleDumper:
         ]
         samples: list[PPOSample] = packed_data.samples
         if len(samples) == 0:
-            logger.warning(f"No samples to unpack, return empty list")
+            logger.warning("No samples to unpack, return empty list")
             return []
 
         dump_packed_keys = [key for key in dump_sample_keys if key in packed_keys]
@@ -156,7 +156,7 @@ class RaggedPPOSampleDumper:
         for sample in samples:
             data_item = {}
             for key in dump_sample_keys:
-                assert key in sample.__dict__.keys(), f"key {key} not found in sample!"
+                assert key in sample.__dict__, f"key {key} not found in sample!"
                 # TODO: only assume one non python basic class: torch tensor
                 data_item[key] = sample.__dict__[key]
             data_item["meta"] = sample.meta
@@ -168,7 +168,11 @@ class RaggedPPOSampleDumper:
         samples: list[PackedPPOSamples],
         dump_sample_keys: list[str],
     ):
-        unpacked_samples: list[PPOSample] = sum([self._unpack_samples(item, dump_sample_keys) for item in samples], [])
+        unpacked_samples: list[PPOSample] = reduce(
+            lambda acc, item: acc + self._unpack_samples(item, dump_sample_keys),
+            samples,
+            [],
+        )
         unpacked_samples_to_save: list[dict] = self._convert_to_data_for_saving(unpacked_samples, dump_sample_keys)
         return unpacked_samples_to_save
 
@@ -227,7 +231,7 @@ class PersistentQueue:
         data_rep, pending_rep = [], []
         irep, iclass = 0, type(None)
         for item in list(self.data) + [None]:
-            if type(item) != iclass:
+            if type(item) is not iclass:
                 if irep:
                     data_rep.append(f"{iclass.__name__} x{irep}")
                 iclass, irep = type(item), 0
@@ -235,7 +239,7 @@ class PersistentQueue:
 
         irep, iclass = 0, type(None)
         for item in list(reversed(self.pending.values())) + [None]:
-            if type(item) != iclass:
+            if type(item) is not iclass:
                 if irep:
                     pending_rep.append(f"{iclass.__name__} x{irep}")
                 iclass, irep = type(item), 0
@@ -300,7 +304,7 @@ class PersistentSource(PersistentQueue):
         return sample
 
     def put(self, data):
-        raise RuntimeError(f"Cannot put to Source!")
+        raise RuntimeError("Cannot put to Source!")
 
     def state_dict(self):
         return {
@@ -323,11 +327,11 @@ class PersistentDumper(PersistentQueue):
         if os.path.exists(self.dump_dir):
             hist_dumps = [x for x in os.listdir(self.dump_dir) if x.startswith("pdump_")]
             if hist_dumps:
-                hist_dump_ids = [int(re.search(f"pdump_(\d+).pt", x).group(1)) for x in hist_dumps]
+                hist_dump_ids = [int(re.search(r"pdump_(\d+)\.pt", x).group(1)) for x in hist_dumps]
                 self.dump_counter = max(hist_dump_ids) + 1
 
     def get(self):
-        raise RuntimeError(f"Cannot get from Dumper!")
+        raise RuntimeError("Cannot get from Dumper!")
 
     def put(self, data):
         self.data.appendleft(data)
@@ -340,7 +344,7 @@ class PersistentDumper(PersistentQueue):
             self.data.clear()
 
     def ack(self, data_id):
-        raise RuntimeError(f"Cannot ack sample to Dumper!")
+        raise RuntimeError("Cannot ack sample to Dumper!")
 
     def state_dict(self):
         return list(self.data)
@@ -357,7 +361,7 @@ class PersistentFlow(dict[str, PersistentQueue]):
 
     def __init__(
         self,
-        meta: dict = None,
+        meta: dict | None = None,
         **stages: dict[str, PersistentQueue],
     ):
         """Data flow that supports checkpointing. NOTE: One sample must be marked as finish

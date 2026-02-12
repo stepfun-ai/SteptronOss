@@ -2,8 +2,6 @@
 
 ## Top-level
 
-::: steptronoss.foo
-
 ::: steptronoss.initialize
 
 ::: steptronoss.timers
