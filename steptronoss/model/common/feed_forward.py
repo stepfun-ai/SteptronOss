@@ -1,5 +1,6 @@
 import torch
 from configurize import Config, Ref
+from torch import nn
 from torch.nn import functional as F
 
 from steptronoss.core import tensor_parallel
@@ -74,3 +75,59 @@ class FeedForward(torch.nn.Module):
             x = self.activation(self.w1(x)[0])
             output = self.w2(x)[0]
         return output
+
+
+class MLPConfig(Config):
+    """Plain MLP config."""
+
+    tp_cfg: MegatronTPConfig = Ref("..tp_cfg")
+    """Tensor-parallel config."""
+    hidden_size: int
+    """Model hidden size."""
+    ffn_hidden_size: int
+    """FFN hidden size."""
+    act_layer: nn.Module
+    """Activation layer."""
+    use_bias: bool
+    """Use bias for MLP projections."""
+
+    def __init__(self):
+        super().__init__()
+        self.tp_cfg = Ref("..tp_cfg")
+        self.hidden_size = Ref("..hidden_size")
+        self.ffn_hidden_size = 0
+        self.act_layer = nn.GELU
+        self.use_bias = True
+
+    def build_model(self, layer_id: int):
+        return MLP(cfg=self, layer_id=layer_id)
+
+
+class MLP(torch.nn.Module):
+    def __init__(self, cfg: MLPConfig, layer_id: int):
+        super().__init__()
+        self.cfg = cfg
+        self.layer_id = layer_id
+
+        self.w1 = tensor_parallel.ColumnParallelLinear(
+            cfg.hidden_size,
+            cfg.ffn_hidden_size,
+            bias=cfg.use_bias,
+            gather_output=False,
+            async_tensor_model_parallel_allreduce=cfg.tp_cfg.async_tensor_model_parallel_allreduce,
+            **cfg.tp_cfg.get_tp_kwargs(),
+        )
+        self.w2 = tensor_parallel.RowParallelLinear(
+            cfg.ffn_hidden_size,
+            cfg.hidden_size,
+            bias=cfg.use_bias,
+            input_is_parallel=True,
+            **cfg.tp_cfg.get_tp_kwargs(),
+        )
+        self.act = cfg.act_layer()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.w1(x)[0]
+        x = self.act(x)
+        x = self.w2(x)[0]
+        return x

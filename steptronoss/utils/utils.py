@@ -33,6 +33,49 @@ def unwrap_model(model, module_instances=(torchDDP, ModelWrapperBase)) -> Megatr
     return unwrapped_model
 
 
+def patch_scatter(
+    input_embeddings: torch.Tensor,
+    patch_features: torch.Tensor,
+    insert_locations: torch.Tensor,
+) -> torch.Tensor:
+    """Scatter patch features into input embeddings.
+
+    Args:
+        input_embeddings: Tensor shaped [S, B, C].
+        patch_features: Tensor shaped [N, L, C].
+        insert_locations: Tensor shaped [N, 2] with (batch_idx, start_pos).
+    """
+    if patch_features.numel() == 0 or insert_locations.numel() == 0:
+        return input_embeddings
+
+    if input_embeddings.dim() != 3 or patch_features.dim() != 3 or insert_locations.dim() != 2:
+        raise ValueError("Expected input_embeddings [S,B,C], patch_features [N,L,C], insert_locations [N,2]")
+    if insert_locations.shape[1] != 2:
+        raise ValueError("insert_locations must have shape [N,2]")
+
+    seq_len, batch_size, hidden = input_embeddings.shape
+    num_patches, patch_len, patch_hidden = patch_features.shape
+    if hidden != patch_hidden:
+        raise ValueError(f"Hidden size mismatch: {hidden} vs {patch_hidden}")
+    if insert_locations.shape[0] != num_patches:
+        raise ValueError(f"insert_locations ({insert_locations.shape[0]}) must match patch_features ({num_patches})")
+
+    if patch_features.device != input_embeddings.device:
+        patch_features = patch_features.to(input_embeddings.device)
+    if insert_locations.device != input_embeddings.device:
+        insert_locations = insert_locations.to(input_embeddings.device)
+
+    batch_idx = insert_locations[:, 0].long()
+    start_pos = insert_locations[:, 1].long()
+    if torch.any(start_pos < 0) or torch.any(start_pos + patch_len > seq_len):
+        raise ValueError("insert_locations out of bounds for input_embeddings")
+
+    positions = start_pos[:, None] + torch.arange(patch_len, device=input_embeddings.device)
+    output = input_embeddings.clone()
+    output[positions, batch_idx[:, None]] = patch_features
+    return output
+
+
 def calc_params_l2_norm(model, is_bf16=False):
     """Calculate l2 norm of parameters"""
     from steptronoss.core.tensor_parallel import (
