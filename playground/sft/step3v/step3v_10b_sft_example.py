@@ -226,9 +226,9 @@ if __name__ == "__main__":
     exp = Exp()
     # Use below code to compile data
 
-    torch.set_num_threads(1)
-    exp.data_cfg.dataset_cfg = ExampleMMDatasetsConfig()
-    exp.data_cfg.dataset_cfg.compile("/mnt/shared-storage/tenant/zhy/mini-o3-step3vl-compiled/")
+    # torch.set_num_threads(1)
+    # exp.data_cfg.dataset_cfg = ExampleMMDatasetsConfig()
+    # exp.data_cfg.dataset_cfg.compile("/mnt/shared-storage/tenant/zhy/mini-o3-step3vl-compiled/")
     # run python playground/sft/step3v/step3v_10b_sft_example.py
 
-    # exp.train()
+    exp.train()

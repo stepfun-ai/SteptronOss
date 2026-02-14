@@ -41,8 +41,6 @@ def test_mm_template_basic():
     tokenizer = DummyTokenizer(img_token=img_token)
     template = MMMultiTurnChatTemplate(
         tokenizer=tokenizer,
-        img_end_token=img_token,
-        patch_end_token=None,
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -86,4 +84,4 @@ def test_mm_template_basic():
     user_len = len(tokenizer.apply_chat_template([data["conversations"][0]], tokenize=True, add_generation_prompt=True))
     expected_ones = all_tokens.shape[0] - user_len
     assert int(loss_mask.sum().item()) == expected_ones
-    assert len(sample["images"]) == 2
+    assert len(sample["image_path"]) == 2

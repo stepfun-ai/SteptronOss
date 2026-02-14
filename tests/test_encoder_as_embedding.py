@@ -120,6 +120,8 @@ def test_encoder_as_embedding_insert_image():
         PM.initialize(backend="nccl")
     if not getattr(PM, "parallels", None):
         PM.set_mesh(ParallelConfig(tensor_model_parallel_size=2))
+    if PM.world_size != 2:
+        pytest.skip("test embedding inssert need node2")
     set_mpu_random_seed(1234)
 
     cfg = TinyEncoderEmbeddingConfig()

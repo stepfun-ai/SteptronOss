@@ -266,6 +266,8 @@ class MMMultiTurnChatTemplate:
 
         # NOTE: we process images and cache features in advance
         # here we directly fetch feature paths from cache
+        if self.transform is None:
+            return sample
         return self.transform(sample)
 
     def _tokenize(self, messages: Dialog, tools: list | None = None) -> list[int]:

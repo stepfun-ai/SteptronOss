@@ -20,7 +20,6 @@ class TinyAttnConfig(VisionAttentionConfig):
     def __init__(self):
         super().__init__()
         self.num_attention_heads = 4
-        self.num_attention_groups = 4
         self.head_dim = 8
 
 
@@ -42,7 +41,6 @@ class TinyPoolConfig(PerceptionPoolConfig):
 class TinyMLPConfig(VisionMLPConfig):
     def __init__(self):
         super().__init__()
-        self.mlp_ratio = 2.0
         self.ffn_hidden_size = 64
 
 
