@@ -107,6 +107,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         self.grad_manager: GradientManager = self.exp.optimizer_cfg.build_gradient_manager(self.models)
         if "optimizer" in state_dicts:
             self.grad_manager.load_state_dict(state_dicts["optimizer"])
+        CMT.mark("after_build_grad_manager")
 
         ## Scheduler
         self.opt_param_scheduler: Scheduler = self.exp.scheduler_cfg.build_scheduler(self.grad_manager.optimizer)
@@ -127,6 +128,7 @@ class DecoderPretrainTrainer(BaseTrainer):
             for dl in self.train_data_iterators:
                 if hasattr(dl, "load_state_dict"):
                     dl.load_state_dict(state_dicts["data"])
+        CMT.mark("after_build_dataloaders")
 
         for hook in self._before_train_hooks:
             hook(self)
@@ -159,7 +161,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         # Negative log_level won't be recorded to log files
         self.timers("interval-time", log_level=-1).start(barrier=True)
 
-        while self.iteration < self.exp.trainer_cfg.train_iters:
+        while self.iteration < self.train_iters:
             CMT.mark("start_of_iter")
             update_successful = self.train_step()
             # Logging.
@@ -389,7 +391,7 @@ class DecoderPretrainTrainer(BaseTrainer):
         """
         # Get local num_packed_samples (only data source has valid value)
         if self.exp.trainer_cfg.is_data_source():
-            local_num_samples = self.train_data_iterators[0].nextable.nextable.packing_result.num_packed_samples
+            local_num_samples = len(self.train_data_iterators[0])
         else:
             local_num_samples = 0
 

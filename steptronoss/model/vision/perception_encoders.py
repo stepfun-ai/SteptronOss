@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable
-from functools import partial
+from functools import cached_property, partial
 from typing import Literal, Optional
 
 import torch
@@ -17,6 +17,7 @@ from steptronoss.exp.base_exp import MegatronTPConfig
 from steptronoss.model.common.feed_forward import MLPConfig
 from steptronoss.model.common.multi_head_attention import MultiHeadAttentionConfig
 from steptronoss.model.common.rope import RoPEConfig
+from steptronoss.model.module import MegatronModule
 
 
 class PerceptionEmbedConfig(Config):
@@ -412,7 +413,7 @@ class Transformer(nn.Module):
         return x
 
 
-class VisionTransformer(nn.Module):
+class VisionTransformer(MegatronModule):
     def __init__(self, cfg: PerceptionEncoderConfig):
         super().__init__()
         self.pool_type = cfg.pool_cfg.pool_type
@@ -501,6 +502,214 @@ class PerceptionEncoder(VisionTransformer):
             stride=2,
             padding=1,
         )
+
+    @cached_property
+    def reshaper(self):
+        return self.build_reshaper()
+
+    def build_reshaper(self):
+        from steptronoss.checkpointing.reshape_ops import (
+            MHA_TP_CHUNK,
+            ColumnParallel,
+            Duplicate,
+            KeepThisTP,
+            OnlineReshaper,
+            Rename,
+            RowParallel,
+            Script,
+        )
+
+        scripts = []
+
+        scripts.append(
+            Script(
+                src="conv1.weight",
+                op=Duplicate() + KeepThisTP() + Rename("patch_embed.conv1.weight: conv1.weight"),
+                dst="patch_embed.conv1.weight",
+            )
+        )
+        scripts.append(
+            Script(
+                src="positional_embedding",
+                op=Duplicate() + KeepThisTP() + Rename("patch_embed.positional_embedding: positional_embedding"),
+                dst="patch_embed.positional_embedding",
+            )
+        )
+        scripts.append(
+            Script(
+                src="ln_pre.weight",
+                op=Duplicate() + KeepThisTP() + Rename("ln_pre.weight: ln_pre.weight"),
+                dst="ln_pre.weight",
+            )
+        )
+        scripts.append(
+            Script(
+                src="ln_pre.bias",
+                op=Duplicate() + KeepThisTP() + Rename("ln_pre.bias: ln_pre.bias"),
+                dst="ln_pre.bias",
+            )
+        )
+        scripts.append(
+            Script(
+                src="ln_post.weight",
+                op=Duplicate() + KeepThisTP() + Rename("ln_post.weight: ln_post.weight"),
+                dst="ln_post.weight",
+            )
+        )
+        scripts.append(
+            Script(
+                src="ln_post.bias",
+                op=Duplicate() + KeepThisTP() + Rename("ln_post.bias: ln_post.bias"),
+                dst="ln_post.bias",
+            )
+        )
+
+        scripts.append(
+            Script(
+                src="vit_downsampler1.weight",
+                op=Duplicate() + KeepThisTP() + Rename("vit_downsampler1.weight: vit_downsampler1.weight"),
+                dst="vit_downsampler1.weight",
+            )
+        )
+        scripts.append(
+            Script(
+                src="vit_downsampler1.bias",
+                op=Duplicate() + KeepThisTP() + Rename("vit_downsampler1.bias: vit_downsampler1.bias"),
+                dst="vit_downsampler1.bias",
+            )
+        )
+        scripts.append(
+            Script(
+                src="vit_downsampler2.weight",
+                op=Duplicate() + KeepThisTP() + Rename("vit_downsampler2.weight: vit_downsampler2.weight"),
+                dst="vit_downsampler2.weight",
+            )
+        )
+        scripts.append(
+            Script(
+                src="vit_downsampler2.bias",
+                op=Duplicate() + KeepThisTP() + Rename("vit_downsampler2.bias: vit_downsampler2.bias"),
+                dst="vit_downsampler2.bias",
+            )
+        )
+        for layer_id, _layer in enumerate(self.transformer.resblocks):
+            prefix_src = f"transformer.resblocks.{layer_id}"
+            prefix_dst = f"transformer.resblocks.{layer_id}"
+
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.attn.in_proj_weight",
+                    op=MHA_TP_CHUNK()
+                    + KeepThisTP()
+                    + Rename(f"{prefix_dst}.attn.wqkv.weight: {prefix_src}.attn.in_proj_weight"),
+                    dst=f"{prefix_dst}.attn.wqkv.weight",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.attn.in_proj_bias",
+                    op=MHA_TP_CHUNK()
+                    + KeepThisTP()
+                    + Rename(f"{prefix_dst}.attn.wqkv.bias: {prefix_src}.attn.in_proj_bias"),
+                    dst=f"{prefix_dst}.attn.wqkv.bias",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.attn.out_proj.weight",
+                    op=RowParallel()
+                    + KeepThisTP()
+                    + Rename(f"{prefix_dst}.attn.wo.weight: {prefix_src}.attn.out_proj.weight"),
+                    dst=f"{prefix_dst}.attn.wo.weight",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.attn.out_proj.bias",
+                    op=Duplicate()
+                    + KeepThisTP()
+                    + Rename(f"{prefix_dst}.attn.wo.bias: {prefix_src}.attn.out_proj.bias"),
+                    dst=f"{prefix_dst}.attn.wo.bias",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.ls_1.gamma",
+                    op=Duplicate() + KeepThisTP() + Rename(f"{prefix_dst}.ls_1.gamma: {prefix_src}.ls_1.gamma"),
+                    dst=f"{prefix_dst}.ls_1.gamma",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.ls_2.gamma",
+                    op=Duplicate() + KeepThisTP() + Rename(f"{prefix_dst}.ls_2.gamma: {prefix_src}.ls_2.gamma"),
+                    dst=f"{prefix_dst}.ls_2.gamma",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.ln_1.weight",
+                    op=Duplicate() + KeepThisTP() + Rename(f"{prefix_dst}.ln_1.weight: {prefix_src}.ln_1.weight"),
+                    dst=f"{prefix_dst}.ln_1.weight",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.ln_1.bias",
+                    op=Duplicate() + KeepThisTP() + Rename(f"{prefix_dst}.ln_1.bias: {prefix_src}.ln_1.bias"),
+                    dst=f"{prefix_dst}.ln_1.bias",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.ln_2.weight",
+                    op=Duplicate() + KeepThisTP() + Rename(f"{prefix_dst}.ln_2.weight: {prefix_src}.ln_2.weight"),
+                    dst=f"{prefix_dst}.ln_2.weight",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.ln_2.bias",
+                    op=Duplicate() + KeepThisTP() + Rename(f"{prefix_dst}.ln_2.bias: {prefix_src}.ln_2.bias"),
+                    dst=f"{prefix_dst}.ln_2.bias",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.mlp.c_fc.weight",
+                    op=ColumnParallel()
+                    + KeepThisTP()
+                    + Rename(f"{prefix_dst}.mlp.w1.weight: {prefix_src}.mlp.c_fc.weight"),
+                    dst=f"{prefix_dst}.mlp.w1.weight",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.mlp.c_fc.bias",
+                    op=ColumnParallel()
+                    + KeepThisTP()
+                    + Rename(f"{prefix_dst}.mlp.w1.bias: {prefix_src}.mlp.c_fc.bias"),
+                    dst=f"{prefix_dst}.mlp.w1.bias",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.mlp.c_proj.weight",
+                    op=RowParallel()
+                    + KeepThisTP()
+                    + Rename(f"{prefix_dst}.mlp.w2.weight: {prefix_src}.mlp.c_proj.weight"),
+                    dst=f"{prefix_dst}.mlp.w2.weight",
+                )
+            )
+            scripts.append(
+                Script(
+                    src=f"{prefix_src}.mlp.c_proj.bias",
+                    op=Duplicate() + KeepThisTP() + Rename(f"{prefix_dst}.mlp.w2.bias: {prefix_src}.mlp.c_proj.bias"),
+                    dst=f"{prefix_dst}.mlp.w2.bias",
+                )
+            )
+
+        return OnlineReshaper(scripts)
 
     def forward(self, x: torch.Tensor, **kwargs):
         x = x.detach()

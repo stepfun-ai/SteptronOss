@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 from loguru import logger
@@ -12,6 +11,7 @@ from steptronoss.model.common.parallel_embedding import (
     InputEmbeddingConfig,
     WordEmbedding,
 )
+from steptronoss.utils.memory_tracker import CMT
 from steptronoss.utils.utils import patch_scatter
 
 
@@ -110,6 +110,7 @@ class StepEncoderInputEmbedding(WordEmbedding):
 
     def forward(self, input_ids, images: list[ImageForInsert], **kwargs):
         input_embeddings = super().forward(input_ids, **kwargs)
+        CMT.mark("after_text_embedding")
         for insert_image in images:
             if insert_image.image_features is not None:
                 image_features = insert_image.image_features
@@ -119,11 +120,15 @@ class StepEncoderInputEmbedding(WordEmbedding):
                     image_features = self.encoder(images_list)
             image_features = self.align_projector(image_features)
 
+            CMT.mark(f"after_get_img_feature [{insert_image.insert_start_token}]")
+
             input_embeddings = self.insert_features(
                 input_embeddings=input_embeddings,
                 image_features=image_features,
                 input_ids=input_ids,
                 flag=insert_image.insert_start_token,
             )
+
+            CMT.mark(f"after_insert_feature [{insert_image.insert_start_token}]")
         input_embeddings = self.handle_parallelization(input_embeddings)
         return input_embeddings

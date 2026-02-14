@@ -4,104 +4,7 @@ This module provides the DataList class for organizing data paths and mount poin
 used in SFT and RL training configurations.
 """
 
-import random
-from collections.abc import Iterator
-from dataclasses import dataclass, field
-
-
-@dataclass
-class DataList:
-    """A container for dataset paths and their associated mount points.
-
-    This class manages collections of data file paths along with their required
-    mount points for distributed training environments. It supports combining
-    multiple DataList instances and provides convenient methods for validation
-    and introspection.
-
-    Attributes:
-        data_paths: list of absolute paths to dataset files
-        mounts: list of mount point specifications (e.g., "juicefs+s3://...")
-
-    Example:
-        >>> data_list = DataList(
-        ...     data_paths=["/path/to/dataset1.json", "/path/to/dataset2.json"],
-        ...     mounts=["juicefs+s3://bucket:/mnt/data"]
-        ... )
-        >>> print(f"Total files: {len(data_list)}")
-        Total files: 2
-    """
-
-    data_paths: list[str] = field(default_factory=list)
-    mounts: list[str] = field(default_factory=list)
-
-    def __add__(self, other: "DataList") -> "DataList":
-        """Combine two DataList instances.
-
-        Args:
-            other: Another DataList to combine with this one
-
-        Returns:
-            A new DataList containing paths and mounts from both instances
-        """
-        return DataList(
-            data_paths=self.data_paths + other.data_paths,
-            mounts=self.mounts + other.mounts,
-        )
-
-    def __len__(self) -> int:
-        """Return the number of data paths."""
-        return len(self.data_paths)
-
-    def __iter__(self) -> Iterator[str]:
-        """Iterate over data paths."""
-        return iter(self.data_paths)
-
-    def __bool__(self) -> bool:
-        """Return True if there are any data paths."""
-        return bool(self.data_paths)
-
-    def is_empty(self) -> bool:
-        """Check if the DataList contains no data paths.
-
-        Returns:
-            True if data_paths is empty, False otherwise
-        """
-        return len(self.data_paths) == 0
-
-    def unique_mounts(self) -> list[str]:
-        """Get unique mount points, preserving order.
-
-        Returns:
-            list of unique mount specifications
-        """
-        seen = set()
-        unique = []
-        for mount in self.mounts:
-            if mount not in seen:
-                seen.add(mount)
-                unique.append(mount)
-        return unique
-
-    def validate_paths(self) -> list[str]:
-        """Validate that all data paths are absolute paths.
-
-        Returns:
-            list of invalid (non-absolute) paths, empty if all are valid
-        """
-        invalid_paths = []
-        for path in self.data_paths:
-            if not path.startswith("/"):
-                invalid_paths.append(path)
-        return invalid_paths
-
-    def summary(self) -> str:
-        """Generate a summary of the DataList contents.
-
-        Returns:
-            A formatted string describing the DataList contents
-        """
-        return f"DataList: {len(self.data_paths)} files, {len(self.unique_mounts())} unique mounts"
-
+from dataclasses import dataclass
 
 # --- Domain data modeling---
 
@@ -135,68 +38,6 @@ class DataSourceFile:
             )
 
 
-@dataclass
-class DomainData:
-    """
-    Represents a data domain, composed of one or more data source files.
-    """
-
-    files: list[DataSourceFile]
-    """A list of files belonging to this data domain."""
-
-    def __post_init__(self):
-        """
-        Validates the domain data.
-        """
-        if not self.files:
-            raise ValueError("DomainData 'files' list cannot be empty.")
-
-    @classmethod
-    def from_legacy_data(cls, data_paths: list[str | tuple[str, float]]) -> "DomainData":
-        """
-        Convert from a legacy data paths list to a DomainData.
-
-        data_paths is a list where each element can be either:
-            1. A string (str), representing a json file path (subsample_rate defaults to 1.0).
-            2. A tuple (tuple[str, float]), containing a json file path and its subsample rate.
-        """
-        if not data_paths:
-            raise ValueError("Cannot create DomainData from empty data_paths list.")
-
-        data_source_files: list[DataSourceFile] = []
-
-        # Iterate over the mixed list and check the type of each item
-        for item in data_paths:
-            if isinstance(item, str):
-                # Case 1: Item is a string (path only)
-                data_source_files.append(DataSourceFile(path=item, subsample_rate=1.0))
-
-            elif isinstance(item, tuple):
-                # Case 2: Item is a tuple (path, rate)
-                # Perform validation on the tuple structure
-                if not (len(item) == 2 and isinstance(item[0], str) and isinstance(item[1], (float, int))):
-                    raise TypeError(f"Malformed tuple in data_paths list: {item}. Expected (str, float).")
-
-                path, rate = item
-                data_source_files.append(DataSourceFile(path=path, subsample_rate=float(rate)))
-
-            else:
-                # Handle unexpected types
-                raise TypeError(
-                    f"Unsupported item type in data_paths: {type(item)}. Expected str or tuple[str, float]."
-                )
-
-        # The new cls(files=...) instance will automatically trigger
-        # the __post_init__ checks for both DomainData and DataSourceFile.
-        return cls(files=data_source_files)
-
-    def get_shuffled_raw_files(self):
-        # Convert to list[tuple[str, float]], shuffle and then return
-        raw_files = [[source_file.path, source_file.subsample_rate] for source_file in self.files]
-        random.Random(1234).shuffle(raw_files)
-        return raw_files
-
-
 # --- The data recipe ---
 
 
@@ -206,7 +47,7 @@ class DataRecipe:
     A complete model for SFT training data and its sampling plan.
     """
 
-    domains: dict[str, DomainData]
+    domains: dict[str, list[DataSourceFile]]
     """
     Definition of the data domains.
     Key is the unique name of the domain (e.g., "wiki", "code", "chat").

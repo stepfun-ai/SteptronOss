@@ -42,6 +42,26 @@ class QwenModel(LlamaLikeModel):
                     dst="tok_embeddings.word_embeddings.weight",
                 )
             )
+            if hasattr(self.tok_embeddings, "align_projector"):
+                scripts.append(
+                    Script(
+                        src="vit_large_projector.weight",
+                        op=Duplicate()
+                        + KeepThisTP()
+                        + Rename("tok_embeddings.align_projector.weight: vit_large_projector.weight"),
+                        dst="tok_embeddings.align_projector.weight",
+                    )
+                )
+            # process vision encoder
+            if hasattr(self.tok_embeddings, "encoder") and hasattr(self.tok_embeddings.encoder, "reshaper"):
+                sub_reshaper = self.tok_embeddings.encoder.reshaper
+                scripts.append(
+                    Script(
+                        src="vision_model.*",
+                        op=Rename("*:vision_model.*") + sub_reshaper + Rename("tok_embeddings.encoder.*:*"),
+                        dst="tok_embeddings.encoder.*",
+                    )
+                )
         if self.is_pipeline_last_stage():
             if not self.cfg.tie_embedding:
                 scripts.append(

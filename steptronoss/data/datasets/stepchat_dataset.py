@@ -21,17 +21,21 @@ from steptronoss.data.datasets.base_language_dataset import (
     MessageItem,
 )
 from steptronoss.data.recipe import DataSourceFile
+from steptronoss.utils import load
+
 
 # message in json
-JMessageItem = TypedDict(
-    "JMessageItem",
-    {
-        "from": str,
-        "content": str | list[MessageContentPart | str],
-        "name": str,  # Agent name
-        "loss_mask": Literal[0, 1] | None,  # 1
-    },
-)
+class JSONMessage(TypedDict):
+    role: str
+    content: str
+    name: str
+    loss_mask: Literal[0, 1] | None
+    ground_truth: Any | None
+
+
+class JSONSample(TypedDict):
+    conversations: list[JSONMessage]
+    images: list[str] | None
 
 
 class StepChatJsonDataset(torch.utils.data.Dataset):
@@ -79,8 +83,7 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
         f_path, sample_rate = f_path.path, f_path.subsample_rate
 
         valid_dialog_nums = 0
-        with smart_open(f_path, "rb") as f:
-            raw_dialogs: list[list[JMessageItem]] = json.load(f)
+        raw_dialogs: list[JSONSample] = load(f_path)
 
         if 0.0 < sample_rate < 1:
             # raw_dialogs = raw_dialogs[:int(len(raw_dialogs) * sample_rate)]
@@ -174,7 +177,7 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
             raise ValueError(f"Invalid content message part: {p}, {e}")
 
     @classmethod
-    def convert_message_item(cls, item: JMessageItem) -> list[MessageContentPart]:
+    def convert_message_item(cls, item: JSONMessage) -> list[MessageContentPart]:
         if "content" not in item:  # Backward compatibility
             assert "value" in item
             content = item["value"]
@@ -187,17 +190,8 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
         return [cls.convert_content_part(c) for c in content if c is not None]
 
     @classmethod
-    def convert_tag_item(cls, item: JMessageItem) -> str:
-        tags = item.get("tags", item.get("tag"))
-        if isinstance(tags, list) and tags:
-            return tags[0]
-        if tags:
-            return str(tags)
-        return "untag"
-
-    @classmethod
-    def convert_dialog(cls, raw_dialog: list[JMessageItem], f_path: str = "") -> Dialog:
-        def get_tool_schemas(item: JMessageItem) -> list[dict] | None:
+    def convert_dialog(cls, raw_dialog: JSONSample, f_path: str = "") -> Dialog:
+        def get_tool_schemas(item: JSONMessage) -> list[dict] | None:
             tools = item.get("tools", None)
             if tools:
                 return tools
@@ -205,26 +199,24 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
                 return item.get("tool_schemas", None)
 
         try:
-            return [
-                MessageItem(
-                    role=(
-                        "user"
-                        if (item.get("from") or item.get("role")).lower() in ["user", "human"]
-                        else (item.get("from") or item.get("role")).lower()
-                    ),
-                    content=cls.convert_message_item(item),
-                    name=(item.get("name", "") or "").strip(),  # handle the conflict between datapipe and steptron
-                    loss_mask=item.get("loss_mask", 1),  # handle the conflict between datapipe and steptron
-                    ground_truth=item.get("ground_truth", None),
-                    tags=cls.convert_tag_item(item),
-                    tool_calls=item.get("tool_calls", None),
-                    reasoning_content=item.get("reasoning_content", None),
-                    tool_schemas=get_tool_schemas(item),
-                    tool_call_id=item.get("tool_call_id", None),
-                    data_path=f_path,
-                )
-                for item in raw_dialog
-            ]
+            return Dialog(
+                conversations=[
+                    MessageItem(
+                        role=item["role"].lower(),
+                        content=cls.convert_message_item(item),
+                        name=(item.get("name", "") or "").strip(),
+                        loss_mask=item.get("loss_mask", 1),
+                        ground_truth=item.get("ground_truth", None),
+                        tool_calls=item.get("tool_calls", None),
+                        reasoning_content=item.get("reasoning_content", None),
+                        tool_schemas=get_tool_schemas(item),
+                        data_path=f_path,
+                    )
+                    for item in raw_dialog["conversations"]
+                ],
+                images=raw_dialog.get("images", None),
+            )
+
         except Exception as e:
             print(raw_dialog)
             raise e
@@ -234,7 +226,7 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
         if len(dialog) < 2:
             return "less than 2 msgs"
 
-        for msg in dialog:
+        for msg in dialog["conversations"]:
             if msg["name"] and "\n" in msg["name"]:
                 return "name contains newline"
 
@@ -242,7 +234,7 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
                 if not msg["content"] and not msg["tool_calls"]:  # content and toolcall is empty
                     return "empty or invalid content and toolcall"
 
-        if dialog[-1]["role"] != "assistant":
+        if dialog["conversations"][-1]["role"] != "assistant":
             return "the last message is not assistant"
 
         return None
