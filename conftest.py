@@ -26,9 +26,12 @@ def _get_marker_expr() -> str | None:
 
 def pytest_configure(config):
     rank = int(os.environ.get("RANK", "0"))
+    config.addinivalue_line("markers", "xdist_group(name): group tests for xdist/torchrun")
     if os.environ.get("STEPTRON_TORCHRUN") == "1" and _is_cov_run():
         os.environ["COVERAGE_FILE"] = f".coverage.node2.{rank}"
     try:
+        import atexit
+
         import torch.distributed as dist
         from torch.distributed import distributed_c10d as c10d
 
@@ -43,6 +46,11 @@ def pytest_configure(config):
 
         c10d.destroy_process_group = _safe_destroy
         dist.destroy_process_group = _safe_destroy
+        try:
+            atexit.unregister(original_destroy)
+        except Exception:
+            pass
+        atexit.register(_safe_destroy)
     except Exception:
         pass
     if rank != 0:
