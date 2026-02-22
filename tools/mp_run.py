@@ -59,7 +59,9 @@ def spawn_tasks(rsc_cfg: ResourceConfig, command: str):
 class MPRunner:
     def run(self):
         args, extra_args = self.parse_args()
-        os.environ["EXP_ID"] = str(uuid4())[:5]
+        # Use existing EXP_ID if set (for multi-node coordination), otherwise generate new one
+        if "EXP_ID" not in os.environ:
+            os.environ["EXP_ID"] = str(uuid4())[:5]
 
         exp: BaseExp = get_object_from_file(args.exp, "Exp")()
         exp.update_from_args()
