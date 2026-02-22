@@ -14,6 +14,31 @@ from steptronoss.exp.base_exp import BaseExp, ResourceConfig
 from steptronoss.utils.general import get_object_from_file
 
 
+def validate_environment(rsc_cfg: ResourceConfig) -> list[str]:
+    """Check environment is properly configured before spawning.
+
+    Returns list of error messages (empty if valid).
+    """
+    errors = []
+
+    # Check multi-node requirements
+    if rsc_cfg.replica > 1:
+        if "EXP_ID" not in os.environ:
+            errors.append(
+                "Multi-node training (replica > 1) requires EXP_ID to be set.\n"
+                "  Run on ALL nodes: export EXP_ID=<same-id>"
+            )
+
+        meet_dir = os.environ.get("STEPTRON_MEET_DIR")
+        if not meet_dir:
+            errors.append(
+                "Multi-node training requires STEPTRON_MEET_DIR for Redis rendezvous.\n"
+                "  Run: export STEPTRON_MEET_DIR=/path/to/shared/filesystem"
+            )
+
+    return errors
+
+
 def submit_one(command: str, envs: dict[str, str]):
     worker = Popen(command, shell=True, env=os.environ | envs, preexec_fn=os.setsid)  # noqa: S602
 
@@ -59,12 +84,22 @@ def spawn_tasks(rsc_cfg: ResourceConfig, command: str):
 class MPRunner:
     def run(self):
         args, extra_args = self.parse_args()
+
+        exp: BaseExp = get_object_from_file(args.exp, "Exp")()
+        exp.update_from_args()
+
+        # Validate environment before spawning
+        errors = validate_environment(exp.resource_cfg)
+        if errors:
+            print("Environment validation failed:\n", file=sys.stderr)
+            for err in errors:
+                print(f"  - {err}\n", file=sys.stderr)
+            sys.exit(1)
+
         # Use existing EXP_ID if set (for multi-node coordination), otherwise generate new one
         if "EXP_ID" not in os.environ:
             os.environ["EXP_ID"] = str(uuid4())[:5]
 
-        exp: BaseExp = get_object_from_file(args.exp, "Exp")()
-        exp.update_from_args()
         err = None
         try:
             exp.sanity_check()
