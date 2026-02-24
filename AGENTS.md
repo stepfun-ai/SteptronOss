@@ -25,6 +25,7 @@ Not every interaction needs an improvement pass. But for **key tasks**, do an Im
 - Doc style: Config class fields should include a short triple-quote docstring immediately after the attribute definition.
 - Config style: follow `configurize` pattern—class attrs declare sub-config types, instance `__init__` sets concrete values and `Ref("..path")` for cross-node links; configs expose `build()`/`build_*`, `sanity_check()`, `to_dict()`.
 - SFT experiment style (`playground/sft/qwen3/*_sft_step3_data.py`): `Exp(BaseExp)` sets `model_cfg`/`data_cfg` as class attrs, tweaks trainer/checkpoint/model fields in `__init__`, and runs with `if __name__ == "__main__": Exp().train()`.
+- Config Ref rule: Only `Ref(...)` the exact parameters needed, not whole config objects.
 
 ### Repo Layout & Utilities
 - Repo layout: core package under `steptronoss/` (core, model, data, exp, optimizer, generation, tokenizer, utils, checkpointing); experiments live in `playground/`; tests in `tests/`.
