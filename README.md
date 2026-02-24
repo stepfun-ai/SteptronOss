@@ -37,6 +37,32 @@ tools/mp_run.py playground/sft/your_exp.py
 tools/mp_run.py playground/rlvr/qwen3_1p5b_rlvr_math.py profiler_cfg.timing_log_level=1
 ```
 
+### Generate Multi-Node Launch Scripts
+
+Use `tools/build_scripts.py` to generate per-replica shell scripts based on `resource_cfg.task_specs`.
+
+```bash
+# Example: generate scripts under /mnt/entrypoints/<exp_name>/<exp_id>/
+tools/build_scripts.py playground/rlvr/qwen3_1p5b_rlvr_math.py /mnt/entrypoints/
+```
+
+Output layout:
+
+```
+/mnt/entrypoints/<exp_name>/<exp_id>/
+  cpu/
+    0.sh
+  gpu/
+    0.sh
+    1.sh
+    ...
+```
+
+Notes:
+- Script indices are cumulative within each node type (e.g., all GPU tasks share a single 0..N index range).
+- Each script exports task envs (including task-scoped `EXP_ID` and `NNODES`) and invokes the command assembled by `mp_run`.
+- Extra CLI args are passed through to the experiment, just like `mp_run.py`.
+
 ### Runtime Environment
 
 Distributed rendezvous spins up a per-experiment Redis server using a shared
