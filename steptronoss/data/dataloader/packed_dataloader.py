@@ -52,6 +52,7 @@ class MixedPackedDataloader(LazyUpdateNextable):
         in_domain_samplers: list[LoopedShuffleSampler] = []
         _weights: list[float] = []
 
+        sample_sizes = []
         for idx, (dataset, epoch) in enumerate(zip(self.datasets, self.ds_epochs)):
             size = len(dataset)
             if size <= 0:
@@ -64,7 +65,7 @@ class MixedPackedDataloader(LazyUpdateNextable):
                 and isinstance(dataset.sample_meta[0], int)
                 and dataset.sample_meta[0] == len(dataset[0]["tokens"])
             ):
-                dataset.sizes = dataset.sample_meta
+                sample_sizes.append(dataset.sample_meta)
             else:
                 logger.warning(
                     "Getting length of each sample, this might be slow...Use CompiledDataset "
@@ -73,7 +74,7 @@ class MixedPackedDataloader(LazyUpdateNextable):
                     "compile_dataset(dataset, save_path, sample_meta_extractor=lambda x: len(x['tokens']))"
                     "```"
                 )
-                dataset.sizes = [len(x) for x in tqdm(dataset)]
+                sample_sizes.append([len(x) for x in tqdm(dataset)])
 
             in_domain_samplers.append(LoopedShuffleSampler(size=size, base_seed=1234 + idx))
 
@@ -94,7 +95,7 @@ class MixedPackedDataloader(LazyUpdateNextable):
             domain_idx = next(inter_domain_sampler)
             in_domain_idx = next(in_domain_samplers[domain_idx])
             scheduled_piece_order.append((domain_idx, in_domain_idx))
-            scheduled_piece_sizes.append(self.datasets[domain_idx].sizes[in_domain_idx])
+            scheduled_piece_sizes.append(sample_sizes[domain_idx][in_domain_idx])
 
         packing_result = pack(scheduled_piece_sizes, max_len=max_length, oversize_policy=oversize_policy)
         if packing_result.num_droped:

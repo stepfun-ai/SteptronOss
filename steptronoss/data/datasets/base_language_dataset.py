@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 
 class Role(str, Enum):
@@ -31,9 +31,11 @@ class MessageItem(TypedDict):
     content: list[MessageContentPart]
     name: str | None
     loss_mask: Literal[0, 1]
-    reward_type: list[str] = ["any"]
+    ground_truth: Any | None
 
 
-Dialog = list[MessageItem]
+class Dialog(TypedDict):
+    conversations: list[MessageItem]
+
 
 Dataset = list[Dialog]

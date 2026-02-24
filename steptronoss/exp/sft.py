@@ -13,10 +13,10 @@ from steptronoss.exp.base_exp import (
 from steptronoss.exp.checkpointing import CheckpointConfig
 from steptronoss.exp.lr_schedulers import SchedulerConfig
 from steptronoss.exp.ntp import NTPTrainerConfig, PretrainMetricConfig
+from steptronoss.model.decoder_model import DecoderLLMConfig
 
 if TYPE_CHECKING:
     from steptronoss.data.datasets.base_language_dataset import Dataset
-    from steptronoss.model.decoder_model import DecoderLLMConfig
 
 
 class SFTDatasetsConfig(Config):
