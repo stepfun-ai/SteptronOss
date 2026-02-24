@@ -196,11 +196,13 @@ class AttentionCore(nn.Module):
             v_flat = v.reshape(-1, num_heads, head_dim)
 
             outputs = []
-            for b in range(cu_seqlens_q.numel() - 1):
-                q_start = int(cu_seqlens_q[b].item())
-                q_end = int(cu_seqlens_q[b + 1].item())
-                k_start = int(cu_seqlens_k[b].item())
-                k_end = int(cu_seqlens_k[b + 1].item())
+            q_cu = cu_seqlens_q.tolist()
+            k_cu = cu_seqlens_k.tolist()
+            for b in range(len(q_cu) - 1):
+                q_start = q_cu[b]
+                q_end = q_cu[b + 1]
+                k_start = k_cu[b]
+                k_end = k_cu[b + 1]
 
                 q_seq = q_flat[q_start:q_end].transpose(0, 1).unsqueeze(0)  # [1, h, q, d]
                 k_seq = k_flat[k_start:k_end].transpose(0, 1).unsqueeze(0)  # [1, h, k, d]

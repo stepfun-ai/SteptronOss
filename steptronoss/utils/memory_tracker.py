@@ -334,8 +334,8 @@ CMT = CudaMemoryTracker()
 
 def _report_cmt_at_exit():
     try:
-        if torch.cuda.is_available():
-            CMT.report()
+        CMT.mark("on_exit")
+        CMT.report()
     except Exception:
         # Best-effort on shutdown; avoid raising during interpreter exit.
         pass

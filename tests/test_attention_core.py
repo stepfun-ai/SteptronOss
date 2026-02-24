@@ -112,3 +112,51 @@ def test_flash_attention_matches_sdpa_sliding_window(window):
         out_sdpa = sdpa(q, k, v)
 
     torch.testing.assert_close(out_sdpa, out_flash, rtol=1e-3, atol=1e-3)
+
+
+def test_attention_core_with_cu_seqlens_matches_full():
+    torch.manual_seed(0)
+    batch, seq_len, num_heads, head_dim = 1, 6, 2, 8
+    q = torch.randn(batch, seq_len, num_heads, head_dim, dtype=torch.float32)
+    k = torch.randn(batch, seq_len, num_heads, head_dim, dtype=torch.float32)
+    v = torch.randn(batch, seq_len, num_heads, head_dim, dtype=torch.float32)
+
+    cu_seqlens = torch.tensor([0, seq_len], dtype=torch.int32)
+    max_seq_len = seq_len
+
+    core = AttentionCore(causal=True, attention_dropout=0.0, sliding_window=-1).eval()
+    with torch.no_grad():
+        out_cu = core(q, k, v, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len)
+        out_full = core(q, k, v)
+
+    torch.testing.assert_close(out_cu, out_full, rtol=1e-5, atol=1e-5)
+
+
+def test_attention_core_with_cu_seqlens_two_samples():
+    torch.manual_seed(0)
+    num_heads, head_dim = 2, 8
+    seq_lens = [3, 5]
+    total_len = sum(seq_lens)
+
+    q = torch.randn(1, total_len, num_heads, head_dim, dtype=torch.float32)
+    k = torch.randn(1, total_len, num_heads, head_dim, dtype=torch.float32)
+    v = torch.randn(1, total_len, num_heads, head_dim, dtype=torch.float32)
+
+    cu_seqlens = torch.tensor([0, seq_lens[0], total_len], dtype=torch.int32)
+    max_seq_len = max(seq_lens)
+
+    core = AttentionCore(causal=True, attention_dropout=0.0, sliding_window=-1).eval()
+    with torch.no_grad():
+        out_cu = core(q, k, v, cu_seqlens=cu_seqlens, max_seq_len=max_seq_len)
+
+    # Manually compute per-segment outputs and concatenate
+    outputs = []
+    start = 0
+    for seg_len in seq_lens:
+        end = start + seg_len
+        out_seg = core(q[:, start:end], k[:, start:end], v[:, start:end])
+        outputs.append(out_seg)
+        start = end
+    out_expected = torch.cat(outputs, dim=1)
+
+    torch.testing.assert_close(out_cu, out_expected, rtol=1e-5, atol=1e-5)
