@@ -8,11 +8,11 @@ def test_build_scripts_generates_replica_scripts(tmp_path):
     result = build_scripts.build_scripts(
         exp_path=exp_path,
         output_root=str(tmp_path),
-        extra_args=["dummy=1"],
+        extra_args=["suffix=test"],
         exp_id="abc12",
     )
 
-    exp_root = tmp_path / "build_scripts_exp" / "abc12"
+    exp_root = tmp_path / "build_scripts_exp" / "test" / "abc12"
     assert exp_root.is_dir()
     assert result.output_dir == str(exp_root)
     assert len(result.scripts) == 7
@@ -25,7 +25,7 @@ def test_build_scripts_generates_replica_scripts(tmp_path):
     assert "export FOO=BAR" in content
     assert "export TRAIN_ONLY=1" in content
     assert "export NNODES=2" in content
-    assert "tools/smartrun tests/fixtures/build_scripts_exp.py dummy=1" in content
+    assert "tools/smartrun tests/fixtures/build_scripts_exp.py suffix=test" in content
 
     infer_scripts = sorted((exp_root / "gpu").glob("*.sh"))
     assert len(infer_scripts) == 6

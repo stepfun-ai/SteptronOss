@@ -62,7 +62,12 @@ def build_scripts(
     os.environ["EXP_ID"] = exp_id
 
     exp: BaseExp = get_object_from_file(exp_path, "Exp")()
-    exp.update_from_args()
+    original_argv = sys.argv
+    try:
+        sys.argv = [exp_path, *extra_args]
+        exp.update_from_args()
+    finally:
+        sys.argv = original_argv
 
     err = None
     try:
