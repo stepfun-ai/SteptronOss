@@ -137,8 +137,9 @@ class Zero1GradientManager(GradientManager):
 
     def to_device(self, device, non_blocking=False):
         for state in self.optimizer.state.values():
-            state["exp_avg"] = state["exp_avg"].to(device, non_blocking=non_blocking)
-            state["exp_avg_sq"] = state["exp_avg_sq"].to(device, non_blocking=non_blocking)
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = state[k].to(device, non_blocking=non_blocking)
 
         new_fp16_params_in_fp32 = []
         for param_group in self.optimizer.param_groups:
@@ -147,6 +148,7 @@ class Zero1GradientManager(GradientManager):
             for i, param in enumerate(param_group["params"]):
                 # bfloat16 params
                 new_param = param.to(device, non_blocking=non_blocking)
+                tensor_parallel.copy_tensor_model_parallel_attributes(new_param, param)
                 new_fp16_params_in_fp32.append(new_param)
                 param_group["params"][i] = new_param
                 if param in self.optimizer.state:
