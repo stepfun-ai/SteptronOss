@@ -1,15 +1,30 @@
+import json
+
 import numpy as np
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from steptronoss.data.datasets.base_language_dataset import Dialog
 from steptronoss.tokenizer.hf_compat_tokenizer import HFCompatTokenizer
 
+_original_init = ImmutableSandboxedEnvironment.__init__
 
-class Qwen3MultiTurnMaskSFTTemplate:
+
+def _patched_init(self, *args, **kwargs):
+    """support json loading in jinja2 template."""
+    _original_init(self, *args, **kwargs)
+    self.filters["fromjson"] = json.loads
+
+
+ImmutableSandboxedEnvironment.__init__ = _patched_init
+
+
+class HuggingFaceTemplate:
     def __init__(self, tokenizer: HFCompatTokenizer):
         self.tokenizer: HFCompatTokenizer = tokenizer
 
     def __call__(self, data: Dialog):
         # 确保数据以assistant结尾
+        data = data["conversations"]
         assert data[-1]["role"] == "assistant"
 
         # 获取完整的token序列
@@ -19,7 +34,6 @@ class Qwen3MultiTurnMaskSFTTemplate:
             tool_schemas = None
 
         all_tokens = self.apply_chat_template(data, tokenize=True, tools=tool_schemas)
-
         # 找到最后一个user轮的位置
         last_user_idx = -1
         for i in range(len(data) - 1, -1, -1):
@@ -60,13 +74,16 @@ class Qwen3MultiTurnMaskSFTTemplate:
     def apply_chat_template(self, messages, tokenize=True, tools=None):
         add_generation_prompt = False if messages[-1]["role"] == "assistant" else True
         if tools:
-            return self.tokenizer.apply_chat_template(
+            tokenized = self.tokenizer.apply_chat_template(
                 messages,
                 tokenize=tokenize,
                 tools=tools,
                 add_generation_prompt=add_generation_prompt,
             )
         else:
-            return self.tokenizer.apply_chat_template(
+            tokenized = self.tokenizer.apply_chat_template(
                 messages, tokenize=tokenize, add_generation_prompt=add_generation_prompt
             )
+        if isinstance(tokenized, list):
+            return tokenized
+        return tokenized["input_ids"]

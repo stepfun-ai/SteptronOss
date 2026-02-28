@@ -198,6 +198,9 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
             else:
                 return item.get("tool_schemas", None)
 
+        if "conversation" not in raw_dialog:
+            raw_dialog = {"conversations": raw_dialog}
+
         try:
             return Dialog(
                 conversations=[
@@ -214,7 +217,7 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
                     )
                     for item in raw_dialog["conversations"]
                 ],
-                images=raw_dialog.get("images", None),
+                images=raw_dialog.get("images"),
             )
 
         except Exception as e:

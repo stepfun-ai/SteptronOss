@@ -92,7 +92,7 @@ class DPMux(SlowFastNextable):
         return my_batch
 
     def __len__(self):
-        return len(self.nextable) // self.dp_size
+        return len(self.nextable)
 
     def state_dict(self):
         return self.nextable.state_dict()
