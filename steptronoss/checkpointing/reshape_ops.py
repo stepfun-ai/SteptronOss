@@ -101,88 +101,38 @@ class KeepThisTP(ReshapeOp):
 
 
 class KeepThisEP(ReshapeOp):
-    """Filter experts based on EP rank and remap global IDs to local IDs.
-    Assumes input keys are in format '...moe.{id}...' produced by UnbindMoE."""
+    """{A: Tensor[E, A, B] -> A: Tensor[E/size, A, B]}"""
 
-    def __init__(self, moe_key_prefix="moe."):
+    def __init__(self, group="EP", dim=0):
         super().__init__()
-        self.moe_key_prefix = moe_key_prefix
-        self.pattern = re.compile(rf"{re.escape(self.moe_key_prefix)}(\d+)\.")
+        self.group = group
+        self.dim = dim
 
     def forward(self, piece: dict) -> dict:
-        if PM.size_of("EP") <= 1:
+        if PM.size_of(self.group) <= 1:
             return piece
-
-        ep_rank = PM.rank_in("EP")
-        ep_size = PM.size_of("EP")
-
-        # Identify all expert IDs to infer total count and local range
-        expert_ids = []
-        for k in piece:
-            match = self.pattern.search(k)
-            if match:
-                expert_ids.append(int(match.group(1)))
-
-        if not expert_ids:
-            return piece
-
-        # Assume experts are contiguous and 0-indexed
-        num_global_experts = max(expert_ids) + 1
-        num_local_experts = num_global_experts // ep_size
-        start_expert = ep_rank * num_local_experts
-        end_expert = start_expert + num_local_experts
-
         new_piece = {}
+        ep_size = PM.size_of(self.group)
+        ep_rank = PM.rank_in(self.group)
         for k, v in piece.items():
-            match = self.pattern.search(k)
-            if match:
-                eid = int(match.group(1))
-                if start_expert <= eid < end_expert:
-                    local_eid = eid - start_expert
-                    # Replace global ID with local ID: moe.100. -> moe.36.
-                    new_key = k.replace(
-                        f"{self.moe_key_prefix}{eid}.",
-                        f"{self.moe_key_prefix}{local_eid}.",
-                    )
-                    new_piece[new_key] = v
-                # else: drop this key
-            else:
-                new_piece[k] = v
+            if v.shape[self.dim] % ep_size != 0:
+                raise ValueError(f"{k} dim {self.dim} size {v.shape[self.dim]} not divisible by {ep_size}")
+            new_piece[k] = torch.chunk(v, ep_size, dim=self.dim)[ep_rank]
         return new_piece
 
     def backward(self, piece: dict) -> dict:
-        if PM.size_of("EP") <= 1:
+        if PM.size_of(self.group) <= 1:
             return piece
-
-        # Gather all pieces from EP group
-        gathered_pieces = _gather_reshape_piece(piece, group=PM.group_of("EP"))
-
-        # Infer num_local_experts to calculate offsets
-        # We check all gathered pieces to find the max local ID
-        max_local_id = -1
+        gathered_pieces = _gather_reshape_piece(piece, group=PM.group_of(self.group))
+        keys = set()
         for p in gathered_pieces:
-            for k in p:
-                match = self.pattern.search(k)
-                if match:
-                    max_local_id = max(max_local_id, int(match.group(1)))
-
-        num_local_experts = max_local_id + 1
-
+            keys |= p.keys()
         new_piece = {}
-        for rank, rank_piece in enumerate(gathered_pieces):
-            start_expert = rank * num_local_experts
-            for k, v in rank_piece.items():
-                match = self.pattern.search(k)
-                if match:
-                    local_eid = int(match.group(1))
-                    global_eid = local_eid + start_expert
-                    new_key = k.replace(
-                        f"{self.moe_key_prefix}{local_eid}.",
-                        f"{self.moe_key_prefix}{global_eid}.",
-                    )
-                    new_piece[new_key] = v
-                else:
-                    new_piece[k] = v
+        for k in keys:
+            parts = [p.get(k, None) for p in gathered_pieces]
+            if any(part is None for part in parts):
+                raise ValueError(f"Missing {k} in gathered EP pieces")
+            new_piece[k] = torch.cat(parts, dim=self.dim)
         return new_piece
 
 

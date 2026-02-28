@@ -159,8 +159,8 @@ class QwenModel(LlamaLikeModel):
                 block_scripts.append(
                     Script(
                         src=f"{prefix_src}.mlp.experts.*.[gu]*_proj.weight",
-                        op=KeepThisEP(moe_key_prefix="experts.")
-                        + Inverse(UnbindMoE(moe_key_prefix="experts."))
+                        op=Inverse(UnbindMoE(moe_key_prefix="experts."))
+                        + KeepThisEP()
                         + FFNMergeGateUp(group="ETP")
                         + KeepThisTP(group="ETP")
                         + Rename(
@@ -172,8 +172,8 @@ class QwenModel(LlamaLikeModel):
                 scripts.append(
                     Script(
                         src=f"{prefix_src}.mlp.experts.*.down_proj.weight",
-                        op=KeepThisEP(moe_key_prefix="experts.")
-                        + Inverse(UnbindMoE(moe_key_prefix="experts."))
+                        op=Inverse(UnbindMoE(moe_key_prefix="experts."))
+                        + KeepThisEP()
                         + RowParallel(group="ETP")
                         + KeepThisTP(group="ETP")
                         + Rename(
