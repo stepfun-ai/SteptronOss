@@ -210,7 +210,10 @@ class DecoderPretrainTrainer(BaseTrainer):
 
             if self.exp.trainer_cfg.offload_optimizer_state:
                 if self.grad_manager is not None:
-                    self.grad_manager._cpu_offload(adam_only=False, zero_grad=False)
+                    CMT.mark("before_cpu_offload_optimizer_state")
+                    with self.timers.record("optimizer-offload", log_level=2):
+                        self.grad_manager._cpu_offload()
+                    CMT.mark("after_cpu_offload_optimizer_state")
 
             pp_scheduler.run(grad_accumulation_steps)
         CMT.mark("after_forward_backward")
@@ -221,7 +224,10 @@ class DecoderPretrainTrainer(BaseTrainer):
 
         if self.exp.trainer_cfg.offload_optimizer_state:
             if self.grad_manager is not None:
-                self.grad_manager._cpu_backload(adam_only=False)
+                CMT.mark("before_cpu_backload_optimizer_state")
+                with self.timers.record("optimizer-backload", log_level=2):
+                    self.grad_manager._cpu_backload()
+                CMT.mark("after_cpu_backload_optimizer_state")
 
         # Update parameters.
         with self.timers.record("optimizer-step", log_level=1):
@@ -349,13 +355,6 @@ class DecoderPretrainTrainer(BaseTrainer):
 
         # GPU allocation.
         model.cuda(torch.cuda.current_device())
-
-        # if self.exp.optimizer_cfg.optimizer == "muon":
-        #     # We must setup muon tags on params before calling LocalDDP to make
-        #     # comm-free zero partition work.
-        #     from steptron.optimizer.muon import prepare_model_for_muon
-
-        #     prepare_model_for_muon(model, model_config)
 
         return model
 

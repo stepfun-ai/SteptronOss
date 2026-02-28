@@ -189,7 +189,8 @@ class FWBWScheduler:
 
         data = self._prefetched_data[vp_rank].pop(0)
 
-        data = self.data_proc_fn(data)
+        with get_timers().record("data-preprocess", log_level=1):
+            data = self.data_proc_fn(data)
         # ugly hack to get the grad_accumulation_steps in model
         data["loss_scale"] = loss_scale
         data["mtp_loss_scale"] = loss_scale

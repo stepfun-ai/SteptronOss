@@ -179,21 +179,21 @@ class TrainerConfig(AbstractTrainerConfig):
             pass
 
         if PM.i_am("PP", 0) or PM.i_am("PP", -1):
-            with get_timers().record("dataloader-next", log_level=2):
-                if PM.i_am("TP", 0):
-                    if PM.i_am("CP", 0):
+            if PM.i_am("TP", 0):
+                if PM.i_am("CP", 0):
+                    with get_timers().record("dataloader-next", log_level=1):
                         data = next(data_iterator)
-                    else:
-                        data = None
-                    with get_timers().record("broadcast-tensors-cp", log_level=2):
-                        data = broadcast_tensors(
-                            data,
-                            src_rank=PM.ranks_of("CP")[0],
-                            group=PM.group_of("CP"),
-                            move_to_cuda=True,
-                        )
                 else:
                     data = None
+                with get_timers().record("broadcast-tensors-cp", log_level=2):
+                    data = broadcast_tensors(
+                        data,
+                        src_rank=PM.ranks_of("CP")[0],
+                        group=PM.group_of("CP"),
+                        move_to_cuda=True,
+                    )
+            else:
+                data = None
 
             with get_timers().record("broadcast-tensors-tp", log_level=2):
                 data = broadcast_tensors(

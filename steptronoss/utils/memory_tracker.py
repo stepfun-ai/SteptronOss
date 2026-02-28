@@ -75,6 +75,7 @@ class CudaMemoryTracker:
     def __init__(self):
         self.tracks: list[MemoryRecord] = []
 
+    @torch._dynamo.disable
     def mark(self, mark: str | None = None):
         if os.getenv("MEM_DIAGNOSE") is None:
             return
@@ -105,7 +106,7 @@ class CudaMemoryTracker:
         if os.getenv("MEM_DIAGNOSE") is None:
             return
         if not self.tracks:
-            logger.info("CudaMemoryTracker report: no records.")
+            logger.warning("CudaMemoryTracker report: no records.")
             return
 
         topk = max(1, topk)
@@ -182,7 +183,7 @@ class CudaMemoryTracker:
         else:
             lines.append(f"Top{topk} CPU memory deltas (rss): insufficient records.")
 
-        logger.info("\n".join(lines))
+        logger.warning("\n".join(lines))
         self.tracks.clear()
 
     def report_over_world(self, topk: int = 3, topk_ranks: int = 1):
@@ -341,4 +342,9 @@ def _report_cmt_at_exit():
         pass
 
 
-atexit.register(_report_cmt_at_exit)
+if os.getenv("MEM_DIAGNOSE") is not None:
+    import sys
+
+    old_hook = sys.excepthook
+    sys.excepthook = lambda a, b, c: [_report_cmt_at_exit(), old_hook(a, b, c)][1]
+    atexit.register(_report_cmt_at_exit)

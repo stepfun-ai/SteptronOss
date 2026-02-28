@@ -32,6 +32,7 @@ from steptronoss.model.common.parallel_embedding import (
 from steptronoss.model.common.rms_norm import RMSNorm
 from steptronoss.model.module import MegatronModule
 from steptronoss.utils.general import get_position_id_from_cu_seqlens
+from steptronoss.utils.memory_tracker import CMT
 from steptronoss.utils.utils import format_layermap
 
 
@@ -136,11 +137,13 @@ class TransformerBlock(nn.Module):
     ) -> torch.Tensor:
         """Forward pass through the transformer block."""
 
+        CMT.mark(f"layer{self.layer_id}_attn_norm_in")
         if self.training and "attn_norm" in self.recompute:
             attn_in = checkpoint(self.attention_norm, self.distribute_saved_activations, x)
         else:
             attn_in = self.attention_norm(x)
 
+        CMT.mark(f"layer{self.layer_id}_attn_in")
         if self.training and "attention" in self.recompute:
             h = x + checkpoint(
                 self.attention,
@@ -160,13 +163,16 @@ class TransformerBlock(nn.Module):
                 **kwargs,
             )
 
+        CMT.mark(f"layer{self.layer_id}_ffn_norm_in")
         if self.training and "ffn_norm" in self.recompute:
             ffn_in = checkpoint(self.ffn_norm, self.distribute_saved_activations, h)
         else:
             ffn_in = self.ffn_norm(h)
 
+        CMT.mark(f"layer{self.layer_id}_ffn_in")
         # moe should not use recompute for router, so let it handle recompute inside.
         out = h + self.feed_forward(ffn_in, recompute="feed_forward" in self.recompute)
+        CMT.mark(f"layer{self.layer_id}_ffn_out")
 
         return out
 
