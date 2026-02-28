@@ -34,6 +34,9 @@ def histogram(top_k_rank: torch.Tensor, expert_num: int) -> torch.Tensor:
         valid_any = valid.any()
         # Avoid scalar .item() to keep TorchDynamo graphs intact.
         max_val = flat.masked_fill(~valid, -1).amax()
+        if not (hasattr(torch, "_dynamo") and torch._dynamo.is_compiling()):
+            if bool(valid_any) and bool(max_val >= expert_num):
+                raise ValueError("top_k_rank contains out-of-range expert index")
         torch._assert(
             torch.logical_or(~valid_any, max_val < expert_num),
             "top_k_rank contains out-of-range expert index",
