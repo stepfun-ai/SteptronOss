@@ -1,5 +1,6 @@
 import torch
 
+from steptronoss.utils.memory_tracker import CMT
 from steptronoss.utils.optimizable import optimizable
 
 
@@ -29,12 +30,14 @@ def histogram(top_k_rank: torch.Tensor, expert_num: int) -> torch.Tensor:
 
     flat = top_k_rank.reshape(-1)
     valid = flat >= 0
-    if valid.any():
-        max_val = int(flat[valid].max().item())
-        if max_val >= expert_num:
-            raise ValueError("top_k_rank contains out-of-range expert index")
-    else:
-        return torch.zeros((expert_num,), device=top_k_rank.device, dtype=torch.int32)
+    if valid.numel() > 0:
+        valid_any = valid.any()
+        # Avoid scalar .item() to keep TorchDynamo graphs intact.
+        max_val = flat.masked_fill(~valid, -1).amax()
+        torch._assert(
+            torch.logical_or(~valid_any, max_val < expert_num),
+            "top_k_rank contains out-of-range expert index",
+        )
 
     # bincount returns int64; cast to int32 to match the C++ output.
     counts = torch.bincount(flat[valid].to(torch.int64), minlength=expert_num)
@@ -79,22 +82,21 @@ def index_compute(indices: torch.Tensor, expert_histogram: torch.Tensor) -> torc
 
     flat = indices.reshape(-1)
     valid = flat >= 0
-    if valid.any():
-        max_val = int(flat[valid].max().item())
-        if max_val >= num_experts:
-            raise ValueError("indices contains out-of-range expert index")
+    if valid.numel() > 0:
+        valid_any = valid.any()
+        max_val = flat.masked_fill(~valid, -1).amax()
+        torch._assert(
+            torch.logical_or(~valid_any, max_val < num_experts),
+            "indices contains out-of-range expert index",
+        )
 
-    if (expert_histogram < 0).any():
-        raise ValueError("expert_histogram must be non-negative")
-    valid_count = int(valid.sum().item())
-    if int(expert_histogram.sum().item()) != valid_count:
-        raise ValueError("expert_histogram does not match number of valid indices")
-
-    if valid_count == 0:
-        return out
-
+    torch._assert(~(expert_histogram < 0).any(), "expert_histogram must be non-negative")
+    torch._assert(
+        expert_histogram.sum() == valid.sum(),
+        "expert_histogram does not match number of valid indices",
+    )
     if num_experts == 0:
-        raise ValueError("num_experts must be positive when indices are valid")
+        torch._assert(~valid.any(), "num_experts must be positive when indices are valid")
 
     hist = expert_histogram.to(torch.int64)
     base_offset = torch.cumsum(hist, dim=0) - hist
@@ -131,6 +133,7 @@ class MoEWeightedGather(torch.autograd.Function):
         index: torch.Tensor,
         weight: torch.Tensor,
     ) -> torch.Tensor:
+        CMT.mark("moe_weighted_gather_forward_start")
         # Gather expert outputs back to token order with weights.
         if index.dtype not in (torch.int32, torch.int64):
             raise TypeError("index must be int32 or int64 tensor")
@@ -146,13 +149,9 @@ class MoEWeightedGather(torch.autograd.Function):
 
         flat_index = index.reshape(-1)
         valid = flat_index >= 0
-        if valid.all():
-            gathered = input.index_select(0, flat_index.to(torch.int64))
-        else:
-            gathered = input.new_zeros((flat_index.numel(), hidden_dim))
-            if valid.any():
-                gathered_valid = input.index_select(0, flat_index[valid].to(torch.int64))
-                gathered[valid] = gathered_valid
+        safe_index = flat_index.clamp_min(0).to(torch.int64)
+        gathered = input.index_select(0, safe_index)
+        gathered = gathered * valid.to(gathered.dtype).unsqueeze(-1)
         acc_dtype = torch.float32 if weight.dtype == torch.float32 else input.dtype
         if gathered.dtype != acc_dtype:
             gathered = gathered.to(acc_dtype)
@@ -160,6 +159,7 @@ class MoEWeightedGather(torch.autograd.Function):
         out = (gathered * weight_flat).reshape(token_num, top_k, hidden_dim).sum(dim=1)
         if out.dtype != input.dtype:
             out = out.to(input.dtype)
+        CMT.mark("moe_weighted_gather_forward_end")
 
         ctx.save_for_backward(input, index, weight)
         return out
@@ -172,14 +172,9 @@ class MoEWeightedGather(torch.autograd.Function):
 
         flat_index = index.reshape(-1)
         valid = flat_index >= 0
-        if valid.all():
-            gathered = input.index_select(0, flat_index.to(torch.int64)).reshape(token_num, top_k, hidden_dim)
-        else:
-            tmp = input.new_zeros((flat_index.numel(), hidden_dim))
-            if valid.any():
-                gathered_valid = input.index_select(0, flat_index[valid].to(torch.int64))
-                tmp[valid] = gathered_valid
-            gathered = tmp.reshape(token_num, top_k, hidden_dim)
+        safe_index = flat_index.clamp_min(0).to(torch.int64)
+        gathered = input.index_select(0, safe_index).reshape(token_num, top_k, hidden_dim)
+        gathered = gathered * valid.reshape(token_num, top_k, 1).to(gathered.dtype)
 
         grad_weight = (grad_out.unsqueeze(1) * gathered).sum(dim=2)
         if grad_weight.dtype != weight.dtype:
@@ -187,14 +182,8 @@ class MoEWeightedGather(torch.autograd.Function):
 
         grad_in = input.new_zeros(input.shape)
         grad_contrib = (grad_out.unsqueeze(1) * weight.to(grad_out.dtype).unsqueeze(-1)).reshape(-1, hidden_dim)
-        if valid.all():
-            grad_in.index_add_(0, flat_index.to(torch.int64), grad_contrib.to(grad_in.dtype))
-        elif valid.any():
-            grad_in.index_add_(
-                0,
-                flat_index[valid].to(torch.int64),
-                grad_contrib[valid].to(grad_in.dtype),
-            )
+        grad_contrib = grad_contrib * valid.to(grad_contrib.dtype).unsqueeze(-1)
+        grad_in.index_add_(0, safe_index, grad_contrib.to(grad_in.dtype))
 
         return grad_in, None, grad_weight
 
