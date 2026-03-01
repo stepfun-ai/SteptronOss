@@ -15,15 +15,14 @@ class FeedForwardConfig(Config):
     layernorm_epsilon: float
     rms_norm_zero_gamma: bool
 
-    swiglu_limit: float
     swiglu_recompute_silu_out_proj: bool
 
-    def activation(self, x):
+    def activation(self, x, swiglu_limit=None):
         l, r = torch.chunk(x, 2, dim=-1)
         l = F.silu(l)
-        if self.swiglu_limit is not None:
-            l = l.clamp(min=None, max=self.swiglu_limit)
-            r = r.clamp(min=-self.swiglu_limit, max=self.swiglu_limit)
+        if swiglu_limit is not None:
+            l = l.clamp(min=None, max=swiglu_limit)
+            r = r.clamp(min=-swiglu_limit, max=swiglu_limit)
         return l * r
 
     def build_model(self, layer_id: int):
@@ -37,7 +36,6 @@ class FeedForward(torch.nn.Module):
 
         self.cfg = cfg
 
-        self.swiglu_limit = cfg.swiglu_limit
         self.distribute_saved_activations = cfg.tp_cfg.distribute_saved_activations
 
         self.activation = self.cfg.activation

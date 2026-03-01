@@ -70,9 +70,10 @@ class YARNRoPE(torch.nn.Module):
         self.max_position_embeddings = max_position_embeddings
         non_repetitive_seqlen = theta * 2 * math.pi * ntk_interp_ratio
         if max_position_embeddings:
-            assert max_position_embeddings <= non_repetitive_seqlen, (
-                f"max_position_embedding larger than one rotation period ({int(non_repetitive_seqlen)})!"
-            )
+            if max_position_embeddings > non_repetitive_seqlen:
+                logger.warning(
+                    f"max_position_embedding larger than one rotation period ({int(non_repetitive_seqlen)})!"
+                )
 
         if ntk_interp_ratio != 1.0:
             assert max_position_embeddings is not None
@@ -176,8 +177,8 @@ class YARNRoPE(torch.nn.Module):
 
         return yarn_freqs
 
-    def _check_set_cos_sin_cache(self, cur_seqlen, device):
-        if cur_seqlen > self._cached_seqlen:
+    def _check_set_cos_sin_cache(self, cur_seqlen=None, device="cuda"):
+        if cur_seqlen and cur_seqlen > self._cached_seqlen:
             frequencies = self._get_frequencies(device=device)
             angles = torch.outer(torch.arange(cur_seqlen, device=device), frequencies)  # S, C / 2
             repeated_angles = angles.repeat([1, 2])

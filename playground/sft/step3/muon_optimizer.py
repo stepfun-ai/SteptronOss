@@ -2,6 +2,14 @@ from steptronoss.exp.optimizer import MuonConfig
 
 
 class Step3p5MuonConfig(MuonConfig):
+    def __init__(self):
+        super().__init__()
+        self.weight_decay = 0.1
+        self.weight_decay_on_1d_params = True
+
+        self.muon_ns_steps = 6
+        self.muon_newtonschulz_fn = "polar_express"
+
     def mark_gather_ops(self, model) -> None:
         from steptronoss.checkpointing.reshape_ops import (
             ColumnParallel,

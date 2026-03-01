@@ -42,17 +42,6 @@ class GradientManagerConfig(Config):
     params_dtype: torch.dtype = Ref("..model_cfg.params_dtype")
 
     use_distributed_optimizer: bool = True
-    optimizer_distribute_granularity: Literal["byte", "tensor"] = "tensor"
-    """Under DistributedOptimizer (zero1), optimizer state can be sharded by bytes or by tensors.
-
-    - raw: [Tensor(size=100), Tensor(size=59)]
-    - Bytes  @dp2: [Tensor(size=80, partial)], [Tensor(size=20, partial), Tensor(size=59), Pad(1)]
-    - Tensor @dp2: [Tensor(size=100)], [Tensor(size=59)]
-
-    - byte distribution can leverage reduce_scatter optimization, with less comm. But
-    does not support optimizer like muon (need grad for full tensor).
-
-    """
 
     clip_grad: float = 1.0
     log_detailed_grad_norms: bool = Ref("..trainer_cfg.log_detailed_grad_norms")

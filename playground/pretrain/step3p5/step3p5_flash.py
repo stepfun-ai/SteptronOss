@@ -44,7 +44,7 @@ class Step3p5FlashAttentionConfig(AttentionConfig):
         self.yarn_beta_slow = 1.0
         self.yarn_beta_fast = 32.0
         self.ntk_interp_ratio = 1.0
-        self.max_position_embeddings = 4096
+        self.max_position_embeddings = 128 * 1024
 
 
 class Step3p5FlashSWAConfig(Step3p5FlashAttentionConfig):
@@ -79,6 +79,19 @@ class Step3p5FlashMoEConfig(MoEConfig):
         self.moe_layer_list = list(range(3, 45))
         self.share_expert_dim = 1280
 
+    def get_experts_swiglu_limit(self, layer_id):
+        return 7 if layer_id in [43, 44] else None
+
+    def get_shared_expert_swiglu_limit(self, layer_id):
+        return (
+            16
+            if layer_id
+            in [
+                44,
+            ]
+            else None
+        )
+
 
 class Step3p5FlashMoEFeedForwardConfig(MoEFeedForwardConfig):
     """Step3p5Flash feed-forward configuration."""
@@ -94,7 +107,6 @@ class Step3p5FlashMoEFeedForwardConfig(MoEFeedForwardConfig):
         self.layernorm_epsilon = 1e-5
         self.rms_norm_zero_gamma = True
 
-        self.swiglu_limit = None
         self.swiglu_recompute_silu_out_proj = True
 
 

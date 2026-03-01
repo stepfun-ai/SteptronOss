@@ -1,11 +1,13 @@
 """Copyright 2026 StepFun Inc. All Rights Reserved."""
 
 from collections.abc import Callable
+from functools import partial
 
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from configurize import Config
+from loguru import logger
 from torch import nn
 from torch.nn import functional as F
 
@@ -32,14 +34,8 @@ from steptronoss.model.utils import (
     moe_scatter,
     moe_weighted_gather,
 )
-
-# from steptron.model.common.optimus_ops import moe_gather
-# from steptronoss.model.common.moe_logging_utils import calc_expert_output_avgnorm_naive
+from steptronoss.timers import timeit
 from steptronoss.utils.metrics import GlobalMetrics
-
-# from steptron.model.common.optimus_op import moe_scatter as optimus_moe_scatter
-# from steptronoss.model.deepep.token_dispatcher import MoEFlexTokenDispatcher
-
 
 GlobalMetrics: MoePretrainMetricConfig
 
@@ -98,6 +94,12 @@ class MoEConfig(Config):
     def get_aux_loss_calib_scale(self):
         return 1
 
+    def get_experts_swiglu_limit(self, layer_id):
+        return None
+
+    def get_shared_expert_swiglu_limit(self, layer_id: int):
+        return None
+
 
 class MoEGate(nn.Module):
     def __init__(
@@ -123,7 +125,11 @@ class GroupedExperts(torch.nn.Module):
 
         self.cfg = cfg
 
-        self.activation = self.cfg.activation
+        self.swiglu_limit = cfg.get_experts_swiglu_limit(layer_id)
+        if self.swiglu_limit:
+            logger.warning(f"Layer {layer_id} using experts swiglu clip: {self.swiglu_limit}")
+
+        self.activation = partial(self.cfg.activation, swiglu_limit=self.swiglu_limit)
 
         self.num_global_experts = cfg.moe_num_experts
         self.num_local_experts = cfg.moe_num_experts // PM.size_of("EP")
@@ -164,19 +170,23 @@ class GroupedExperts(torch.nn.Module):
             x = reduce_from_tensor_model_parallel_region(x, group="ETP")
             x = x * token_weights.sum()
             return x
+        with timeit("moe-compute-index", level=2):
+            scatter_index = index_compute(token_expert_ids, experts_histogram)
 
-        scatter_index = index_compute(token_expert_ids, experts_histogram)
-        x = moe_scatter(x, scatter_index)
+        with timeit("moe-scatter", level=2):
+            x = moe_scatter(x, scatter_index)
 
         experts_histogram = experts_histogram.cpu().long()  # groupgemm need
 
-        x = grouped_gemm(x, self.w1, batch_sizes=experts_histogram, trans_b=True)
+        with timeit("moe-grouped-gemm-act", level=2):
+            x = grouped_gemm(x, self.w1, batch_sizes=experts_histogram, trans_b=True)
 
-        x = self.activation(x)
+            x = self.activation(x)
 
-        x = grouped_gemm(x, self.w2, batch_sizes=experts_histogram, trans_b=True)
+            x = grouped_gemm(x, self.w2, batch_sizes=experts_histogram, trans_b=True)
 
-        x = moe_weighted_gather(x, scatter_index, token_weights)
+        with timeit("moe-gather", level=2):
+            x = moe_weighted_gather(x, scatter_index, token_weights)
 
         x = reduce_from_tensor_model_parallel_region(x, group="ETP")
         return x
@@ -233,6 +243,7 @@ class MoEBlock(nn.Module):
         # moe scaling factor
         self.routed_scaling_factor = self.cfg.routed_scaling_factor
 
+    @timeit(level=2)
     def forward_router(self, logits: torch.FloatTensor):
         logits = logits.float()  # S, global_experts. where S is ONE full sample
 
@@ -355,11 +366,13 @@ class MoEBlock(nn.Module):
 
         dispatcher = TorchA2ADispatcher("EP", num_experts=self.cfg.moe_num_experts)
 
-        x, token_expert_ids, token_weights = dispatcher.dispatch(x, token_expert_ids, token_weights)
+        with timeit("moe-token-dispatch", level=2):
+            x, token_expert_ids, token_weights = dispatcher.dispatch(x, token_expert_ids, token_weights)
 
         x = self.experts(x, token_expert_ids, token_weights)
 
-        x = dispatcher.combine(x)
+        with timeit("moe-token-combine", level=2):
+            x = dispatcher.combine(x)
 
         return x
 

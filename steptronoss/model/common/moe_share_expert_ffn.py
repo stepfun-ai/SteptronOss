@@ -1,5 +1,8 @@
+from functools import partial
+
 import torch
 from configurize import Ref
+from loguru import logger
 
 # from steptronoss.core.tensor_parallel.layers import new_memory_multiple_paras
 from steptronoss.model.common.feed_forward import FeedForward, FeedForwardConfig
@@ -49,13 +52,12 @@ class MoeShareExpertFFN(torch.nn.Module):
             layer_id=layer_id,
         )
         if self.enable_share_expert:
-            with ffn_cfg.modify(ffn_hidden_size=moe_cfg.share_expert_dim):
-                # swiglu_limit_shared = None
-                # if ffn_cfg.use_swiglu_limit_shared:
-                #     if isinstance(ffn_cfg.use_swiglu_limit_shared, float):
-                #         swiglu_limit_shared = ffn_cfg.use_swiglu_limit_shared
-                #     elif isinstance(ffn_cfg.use_swiglu_limit_shared, list):
-                #         swiglu_limit_shared = ffn_cfg.use_swiglu_limit_shared[layer_id]
+            swiglu_limit = moe_cfg.get_shared_expert_swiglu_limit(layer_id)
+            if swiglu_limit:
+                logger.warning(f"Layer {layer_id} using Shared swiglu clip: {swiglu_limit}")
+
+            activation = partial(ffn_cfg.activation, swiglu_limit=swiglu_limit)
+            with ffn_cfg.modify(ffn_hidden_size=moe_cfg.share_expert_dim, activation=activation):
                 self.share_expert = FeedForward(
                     cfg=ffn_cfg,
                     layer_id=layer_id,
