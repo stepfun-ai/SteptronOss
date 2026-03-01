@@ -1,4 +1,4 @@
-from playground.data.sft.reasoning_GCMKSTIDF_sft_stage1_1203_compile_qwen import (
+from playground.data.sft.step_recipe0226_qwen_tokenized import (
     Step3SFTDataQwenTokenizedConfig,
 )
 from playground.pretrain.qwen3.qwen3_30a3b import Qwen3_30A3BConfig

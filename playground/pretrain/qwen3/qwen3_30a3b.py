@@ -84,7 +84,6 @@ class Qwen3MoEFeedForwardConfig(MoEFeedForwardConfig):
         self.layernorm_epsilon = 1e-6
         self.rms_norm_zero_gamma = False
 
-        self.swiglu_limit = None
         self.swiglu_recompute_silu_out_proj = True
 
 

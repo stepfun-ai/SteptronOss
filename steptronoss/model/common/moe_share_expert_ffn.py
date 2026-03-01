@@ -37,16 +37,6 @@ class MoeShareExpertFFN(torch.nn.Module):
 
         self.enable_share_expert = moe_cfg.share_expert_dim > 0
 
-        # swiglu_limit = None
-        # if ffn_cfg.use_swiglu_limit:
-        #     if isinstance(ffn_cfg.use_swiglu_limit, float):
-        #         swiglu_limit = ffn_cfg.use_swiglu_limit
-        #     elif isinstance(ffn_cfg.use_swiglu_limit, list):
-        #         swiglu_limit = ffn_cfg.use_swiglu_limit[layer_id]
-
-        # logger.info(f"Enable swiglu_limit : swiglu_limit={swiglu_limit}", at=0)
-        # rewrite in this way to fix cfg.continuous_memory_ffn=False case
-
         self.moe = MoEBlock(
             cfg=moe_cfg,
             layer_id=layer_id,

@@ -1,4 +1,4 @@
-from playground.data.sft.reasoning_GCMKSTIDF_sft_stage1_1203_compile_step3 import (
+from playground.data.sft.step_recipe0226 import (
     Step3SFTDataStep3TokenizedConfig,
 )
 from playground.pretrain.step3p5.step3p5_toy import Step3p5ToyModelConfig
