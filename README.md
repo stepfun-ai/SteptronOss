@@ -37,8 +37,8 @@ tools/mp_run.py playground/sft/your_exp.py
 tools/mp_run.py playground/rlvr/qwen3_1p5b_rlvr_math.py profiler_cfg.timing_log_level=1
 ```
 
-See `docs/launch_experiments.md` for a detailed launch guide (with a Chinese version in
-`docs/launch_experiments_zh.md`).
+See `docs/LAUNCH_EXPERIMENTS.md` for a detailed launch guide (with a Chinese version in
+`docs/LAUNCH_EXPERIMENTS_ZH.md`).
 
 ### Generate Multi-Node Launch Scripts
 

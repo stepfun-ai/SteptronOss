@@ -1,12 +1,10 @@
 # Modules
 
-## Top-level
-
-::: steptronoss.initialize
-
-::: steptronoss.timers
-
 ## Core
+
+### ParallelManager
+
+#### Parallel State
 
 ::: steptronoss.core.parallel_state
 
@@ -66,9 +64,11 @@
 
 ## Checkpointing
 
-::: steptronoss.checkpointing.hf_checkpoint
+### ReshapeOps
 
 ::: steptronoss.checkpointing.reshape_ops
+
+::: steptronoss.checkpointing.hf_checkpoint
 
 ::: steptronoss.checkpointing.utils
 
@@ -80,6 +80,10 @@
 
 ::: steptronoss.exp.lr_schedulers
 
+## Metrics
+
+::: steptronoss.utils.metrics
+
 ## Utils
 
 ::: steptronoss.utils.dist_utils
@@ -90,8 +94,10 @@
 
 ::: steptronoss.utils.comm_utils
 
-::: steptronoss.utils.metrics
+::: steptronoss.utils.weight_loader
 
 ::: steptronoss.utils.utils
 
-::: steptronoss.utils.weight_loader
+### Local Timers
+
+::: steptronoss.timers

@@ -2,7 +2,7 @@
 
 This note describes how StepTronOSS experiments are started in practice, based on the current repo tooling.
 
-Chinese version: `docs/launch_experiments_zh.md`.
+Chinese version: `docs/LAUNCH_EXPERIMENTS_ZH.md`.
 
 ## Single-task vs. Multi-task experiments
 
@@ -138,26 +138,10 @@ For Docker-based task management platforms, your custom `xx_run` should:
 - Expand them with `resource_cfg.extract()`.
 - Submit tasks in order based on resource type and replica count.
 
-Pseudo-code:
-```python
-def main(exp_path, extra_args):
-    exp = load_exp(exp_path)
-    exp.update_from_args(extra_args)
-    exp.sanity_check()
+See `tools/example_submitter.py` for a runnable, platform-agnostic template
+that replaces platform details with TODOs.
 
-    rsc_cfg = exp.resource_cfg
-    tasks = rsc_cfg.extract()  # {task_name: ResourceConfig}
-
-    torchrun_like = platform_torchrun()  # e.g., "tools/smartrun" or platform-provided launcher
-    for task_name, task_cfg in tasks.items():
-        cmd = task_cfg.command.format(TORCHRUN=torchrun_like, COMMAND=build_command(exp_path, extra_args))
-        for _ in range(task_cfg.replica):
-            submit_job(
-                node_type=task_cfg.node_type,
-                gpu=task_cfg.gpu,
-                image=task_cfg.image,
-                envs=task_cfg.envs,
-                mounts=task_cfg.mounts,
-                command=cmd,
-            )
+Example:
+```bash
+python tools/example_submitter.py path/to/my_exp.py
 ```

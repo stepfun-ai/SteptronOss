@@ -2,7 +2,7 @@
 
 本文介绍 StepTronOSS 中实验的启动方式与使用说明。
 
-英文版见：`docs/launch_experiments.md`。
+英文版见：`docs/LAUNCH_EXPERIMENTS.md`。
 
 ## 单任务 vs 多任务
 
@@ -119,36 +119,12 @@ bash /mnt/entrypoints/<exp_name>/<exp_id>/gpu/0.sh
 ## 平台适配
 
 对接自定义资源管理/任务提交平台（如 Kubernetes、火山云、阿里云），建议实现
-专用的 `tools/xx_run.py`，作为统一提交入口（找AI帮忙）。
+专用的 `tools/xx_run.py`，作为统一提交入口。
 
-对于基于 Docker 的任务管理平台，自定义 `xx_run` 一般流程：
-- 解析实验的 `resource_cfg` / `task_specs`
-- 调用 `resource_cfg.extract()` 展开任务
-- 按资源类型与副本数逐一提交任务
+可参考 `tools/example_submitter.py` 的可运行模板，
+平台细节已替换为 TODO，直接按你的调度系统改造即可。
 
-伪代码:
-```python
-def main(exp_path, extra_args):
-    exp = load_exp(exp_path)
-    exp.update_from_args(extra_args)
-    exp.sanity_check()
-
-    rsc_cfg = exp.resource_cfg
-    tasks = rsc_cfg.extract()
-
-    torchrun_like = platform_torchrun()  # 可替换为平台提供的 torchrun-like 工具
-    for task_name, task_cfg in tasks.items():
-        cmd = task_cfg.command.format(
-            TORCHRUN=torchrun_like,
-            COMMAND=build_command(exp_path, extra_args),
-        )
-        for _ in range(task_cfg.replica):
-            submit_job(
-                node_type=task_cfg.node_type,
-                gpu=task_cfg.gpu,
-                image=task_cfg.image,
-                envs=task_cfg.envs,
-                mounts=task_cfg.mounts,
-                command=cmd,
-            )
+示例:
+```bash
+python tools/example_submitter.py path/to/my_exp.py
 ```

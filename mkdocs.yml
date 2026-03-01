@@ -9,13 +9,15 @@ copyright: Maintained by <a href="https://Randomizez.com">Randomizez</a>.
 
 nav:
   - Home: index.md
-  - Modules: modules.md
+  - Modules: MODULES.md
 plugins:
   - search
   - mkdocstrings:
       handlers:
         python:
           paths: ["steptronoss"]
+          options:
+            heading_level: 3
 theme:
   name: material
   feature:

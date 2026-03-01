@@ -40,7 +40,8 @@ Not every interaction needs an improvement pass. But for **key tasks**, do an Im
 
 ### Parallel & Checkpointing
 - Parallel state: global `PM` in `steptronoss.core.parallel_state` is a `ParallelManager`. Typical flow: `PM.initialize()` → `PM.set_mesh(parallel_cfg)` (or `with PM.use_mesh(parallel_cfg): ...`) where `parallel_cfg.build_parallel()` returns `{name: ranks}`. Helpers: `PM.define_parallel(pattern, **sizes)` to build rank grids; `PM.size_of("TP")`, `PM.rank_in("DP")`, `PM.group_of("PP")`, `PM.ranks_of("EP")`. VPP uses `virtual_pipeline_model_parallel_size` + `get_vpp_rank()/set_vpp_rank()`.
-- Checkpoint reshape: `steptronoss/checkpointing/reshape_ops.py` provides `ReshapeOp` primitives (e.g., `VocabPad`, `ColumnParallel`/`RowParallel`, `KeepThisTP/EP`, `GQAMergeQKV`, `FFNMergeGateUp`, `UnbindMoE`, `Rename`, `Inverse`) and `OnlineReshaper` + `Script` to map HF ↔ ST keys. Usage pattern in `steptronoss/model/qwen_dense.py`: `build_reshaper()` builds a list of `Script(src=..., op=..., dst=...)` and returns `OnlineReshaper(scripts)`. New ops: implement `forward` (HF→ST piece) + `backward` (ST→HF), compose with `+` (Sequential), and use `Script` patterns to select keys.
+- EP/TP sizing: `ParallelConfig.sanity_check()` requires `WORLD_SIZE` divisible by both attention MP size (`PP*TP*CP`) and MoE MP size (`PP*ETP*EP`). For an 8-GPU run with `TP=8` and `EP=8`, set `expert_tensor_parallel_size=1` so MoE MP size is 8 (not 64).
+- Checkpoint reshape: `steptronoss/checkpointing/reshape_ops.py` provides `ReshapeOp` primitives (e.g., `VocabPad`, `ColumnParallel`/`RowParallel`, `KeepThisTP`/`KeepThisEP`, `GQAMergeQKV`, `FFNMergeGateUp`, `UnbindMoE`, `Rename`, `Inverse`) and `OnlineReshaper` + `Script` to map HF ↔ ST keys. Usage pattern in `steptronoss/model/qwen_dense.py`: `build_reshaper()` builds a list of `Script(src=..., op=..., dst=...)` and returns `OnlineReshaper(scripts)`. For expert slicing from per-expert keys, use `Inverse(UnbindMoE(...)) + KeepThisEP()` before TP ops. New ops: implement `forward` (HF→ST piece) + `backward` (ST→HF), compose with `+` (Sequential), and use `Script` patterns to select keys.
 
 ### RLVR Notes
 - RLVR Genable note: `TrainableItem` objects should not pickle/serialize tokenizer instances; override `__getstate__` to drop the tokenizer and rehydrate elsewhere.
@@ -57,3 +58,7 @@ Not every interaction needs an improvement pass. But for **key tasks**, do an Im
 - GPU note: this environment has no worker/GPU access; avoid running GPU-only tests here.
 - Tests note: `@pytest.mark.node2` tests should be marked non-parallel with `pytest.mark.xdist_group("torchrun")` (see `tests/test_moe_layers.py` pattern).
 - Test organization: single-node GPU tests live in `tests/test_muon_optimizer.py`; 2-node GPU tests live in `tests/test_muon_optimizer_node2.py`.
+### Debugging
+- `steptronoss.utils.memory_tracker.CMT` only records when `MEM_DIAGNOSE` is set; set `MEM_DIAGNOSE=1` in runs that need memory marks.
+- If training hangs on `Waiting for debugger... ip: ... rank: 56`, check for a stray `debug(56)` call in `steptronoss/core/trainers/lm_trainer.py` and remove/disable it.
+- TorchDynamo graph breaks can be triggered by `Tensor.item()` in `optimizable()` helpers; prefer tensor-safe checks (e.g., masked `amax` + `torch._assert`) to keep captures intact.
