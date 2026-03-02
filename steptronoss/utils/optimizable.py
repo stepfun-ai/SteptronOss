@@ -1,3 +1,9 @@
+"""Optimizable function registry and selection helpers.
+
+This module registers functions with alternative implementations (e.g., torch.compile)
+and provides a setter to choose which alternative to use at runtime.
+"""
+
 from collections.abc import Callable
 from typing import TypedDict
 
@@ -55,6 +61,17 @@ def optimizable(alternatives: dict[str, Callable] | None = None):
 
 
 def set_optimization(default=None, **kwargs):
+    """Select optimized alternatives for registered optimizable functions.
+
+    Args:
+        default: Optional alternative name applied to all functions that provide it.
+        **kwargs: Per-function overrides mapping function name (or full path) to
+            an alternative name to enable.
+
+    Tip:
+        Use a global search for ``@optimizable`` to discover which functions are
+        registered and what replacements are available.
+    """
     from pprint import pformat
 
     global OPTIMIZABLE_REGISTER

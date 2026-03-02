@@ -249,27 +249,7 @@ class TrainerConfig(AbstractTrainerConfig):
         A hook is a `Callable[[Trainer], []]`
         """
 
-        def check_uninitialized_model_weight(trainer):
-            from steptronoss.core.parallel_state import PM
-            from steptronoss.utils.utils import unwrap_model
-
-            if hasattr(trainer, "models") and PM.i_am("DP", 0) and PM.i_am("TP", 0):
-                uninitialized_keys = []
-                for model in trainer.models:
-                    model = unwrap_model(model)
-                    for name, param in model.named_parameters():
-                        if not getattr(param, "has_initialized", False):
-                            uninitialized_keys.append(name)
-                if uninitialized_keys:
-                    logger.warning(
-                        f"The following parameters are not marked as initialized. "
-                        f"Please add 'init_model_weight' method in the corresponding module or its parent module "
-                        f"and mark parameters with 'has_initialized=True' after initialization:  {uninitialized_keys}"
-                    )
-
-        return [
-            check_uninitialized_model_weight,
-        ]
+        return []
 
     def build_before_step_hooks(self) -> list[TrainerHook]:
         """\

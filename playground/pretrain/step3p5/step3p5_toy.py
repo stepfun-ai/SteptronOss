@@ -40,5 +40,4 @@ class Step3p5ToyModelConfig(Step3p5FlashModelConfig):
             from torch.nn.init import trunc_normal_
 
             trunc_normal_(p)
-            p.has_initialized = True
         return model
