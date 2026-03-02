@@ -59,7 +59,7 @@ def _set_parallel(tp: int):
 @pytest.mark.skipif(not torch.cuda.is_bf16_supported(), reason="bf16 not supported")
 @pytest.mark.parametrize("tp", [1, 2])
 def test_qwen3_8b_embed_1block_hardcoded_backward_reference(tp):
-    from playground.pretrain.qwen3.qwen3_8 import Qwen3_8BConfig
+    from playground.pretrain.qwen3.qwen3_8b import Qwen3_8BConfig
     from steptronoss.core.parallel_state import PM
     from steptronoss.exp.base_exp import MegatronTPConfig
     from steptronoss.initialize import set_mpu_random_seed
