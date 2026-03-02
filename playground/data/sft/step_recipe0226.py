@@ -14,17 +14,17 @@ from steptronoss.exp.sft import SFTDataConfig
 class Recipe0226DatasetsConfig(CompiledDatasetsConfig):
     compiled_recipe = CompiledDataRecipe(
         domains={
-            "code": "/mnt/shared-storage/tenant/zhy/step_data_0226/code",
-            "math": "/mnt/shared-storage/tenant/zhy/step_data_0226/math",
-            "science": "/mnt/shared-storage/tenant/zhy/step_data_0226/science",
-            "swe_agentic": "/mnt/shared-storage/tenant/zhy/step_data_0226/swe_agentic",
-            "toolcall": "/mnt/shared-storage/tenant/zhy/step_data_0226/toolcall",
-            "general": "/mnt/shared-storage/tenant/zhy/step_data_0226/general",
-            "hot_fix": "/mnt/shared-storage/tenant/zhy/step_data_0226/hot_fix",
-            "logic": "/mnt/shared-storage/tenant/zhy/step_data_0226/logic",
-            "dr": "/mnt/shared-storage/tenant/zhy/step_data_0226/dr",
-            "long_context": "/mnt/shared-storage/tenant/zhy/step_data_0226/long_context",
-            "vc": "/mnt/shared-storage/tenant/zhy/step_data_0226/vc",
+            "code": "/oss/data/step3p5_sft_data/step_data_0226/code",
+            "math": "/oss/data/step3p5_sft_data/step_data_0226/math",
+            "science": "/oss/data/step3p5_sft_data/step_data_0226/science",
+            "swe_agentic": "/oss/data/step3p5_sft_data/step_data_0226/swe_agentic",
+            "toolcall": "/oss/data/step3p5_sft_data/step_data_0226/toolcall",
+            "general": "/oss/data/step3p5_sft_data/step_data_0226/general",
+            "hot_fix": "/oss/data/step3p5_sft_data/step_data_0226/hot_fix",
+            "logic": "/oss/data/step3p5_sft_data/step_data_0226/logic",
+            "dr": "/oss/data/step3p5_sft_data/step_data_0226/dr",
+            "long_context": "/oss/data/step3p5_sft_data/step_data_0226/long_context",
+            "vc": "/oss/data/step3p5_sft_data/step_data_0226/vc",
         },
         epochs={
             "code": 3,

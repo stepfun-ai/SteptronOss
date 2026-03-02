@@ -17,11 +17,6 @@ class Step3F128kSFTResourceConfig(TorchrunResourceConfig):
         super().__init__()
         self.replica = 8
         self.gpu = 8
-        self.mounts.extend([
-            "juicefs+s3://oss.i.shaipower.com/step2-alignment-jfs:/mnt/step2-alignment-jfs",
-            "juicefs+s3://oss.i.shaipower.com/tenant:/mnt/shared-storage/tenant",
-            "gpfs://inspurfs/step2_alignment:/mnt/shared-storage/groups/step2_alignment_2",
-        ])
         self.envs |= {
             # "CUDA_LAUNCH_BLOCKING": "1",
             # "MEM_DIAGNOSE": "1",
@@ -58,7 +53,7 @@ class Step3p5FlashModelConfigBalanced(Step3p5FlashModelConfig):
 
 
 class Exp(BaseExp):
-    log_dir = "/mnt/shared-storage/groups/step2_alignment_2/hujingcheng/tensorboard/steptron_logs_gpfs2/sft_baseline/step4air_midtrain0111_selfdistill_d0116_g32_0225"
+    log_dir = "/oss/logs/"
 
     resource_cfg = Step3F128kSFTResourceConfig
 
@@ -84,12 +79,10 @@ class Exp(BaseExp):
         self.trainer_cfg.log_interval = 1
         self.profiler_cfg.timing_log_level = 2
 
-        self.checkpoint_cfg.load_safetensors = (
-            "/mnt/step2-alignment-jfs/quansun/midtrain/checkpoints/step4air_stage2_128k_0108/it21708_hf_mtp/"
-        )
+        self.checkpoint_cfg.load_safetensors = "/oss/checkpoints/Step3.5-Flash-Base/"
         self.checkpoint_cfg.load_option.none(but=["model"])
         self.checkpoint_cfg.save_safetensors = True
-        self.checkpoint_cfg.save_dir = "/mnt/shared-storage/tenant/tmp/zhy/tmp/"
+        self.checkpoint_cfg.save_dir = "/oss/checkpoints/"
         self.checkpoint_cfg.save_option.all()
         self.checkpoint_cfg.save_interval = 100
 

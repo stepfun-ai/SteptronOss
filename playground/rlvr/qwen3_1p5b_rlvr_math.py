@@ -77,7 +77,6 @@ class FakeGenableGenerator(Nextable):
 
 
 class MathPromptDataConfig(DataConfig):
-    data_path: str = "/mnt/step2-alignment-jfs/rlvr/math/prompts.jsonl"
     prompt_key: str = "prompt"
     answer_key: str = "answer"
     shuffle: bool = True
@@ -109,7 +108,7 @@ class MathPromptDataConfig(DataConfig):
 
 
 class Qwen3TokenizerConfig(TokenizerConfig):
-    tokenizer_path: str = "/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-1.7B/"
+    tokenizer_path: str = "/oss/opensources_model/Qwen3-1.7B/"
 
     def build_tokenizer(self):
         from transformers import AutoTokenizer
@@ -142,13 +141,13 @@ class TinyRLVRResourceConfig(ResourceConfig):
 class TinyRLVRVLLMDeployConfig(VLLMDeployConfig):
     def __init__(self):
         super().__init__()
-        self.model_config_path = "/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-1.7B/"
+        self.model_config_path = "/oss/opensources_model/Qwen3-1.7B/"
         self.max_seq_len = 40960
 
         self.model_name_template = "deployed-model-{EXP_ID}"
         self.vllm_tp = 4
 
-        self.hot_path = "/mnt/shared-storage/tenant/zhy/tmp/"
+        self.hot_path = "/oss/tmp/"
 
 
 class TinyRLVRVLLMRouterConfig(VLLMRouterConfig):
@@ -332,19 +331,19 @@ class Exp(PPOLikeExp):
 
     def __init__(self):
         super().__init__()
-        self.log_dir = "./tensorboard_logs"
+        self.log_dir = "/oss/logs/tensorboard_logs"
 
         self.trainer_cfg.train_iters = 1000
         self.trainer_cfg.global_seq_length = 4096
         self.trainer_cfg.fix_iters = 1
         self.trainer_cfg.fix_iters_critic = 1
 
-        self.checkpoint_cfg.actor.load_safetensors = "/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-1.7B/"
-        self.checkpoint_cfg.critic.load_safetensors = "/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-1.7B/"
+        self.checkpoint_cfg.actor.load_safetensors = "/oss/opensources_model/Qwen3-1.7B/"
+        self.checkpoint_cfg.critic.load_safetensors = "/oss/opensources_model/Qwen3-1.7B/"
         self.checkpoint_cfg.critic.strict_load_model = False
-        self.checkpoint_cfg.reference.load_safetensors = "/mnt/step2-alignment-jfs/zane/opensources_model/Qwen3-1.7B/"
+        self.checkpoint_cfg.reference.load_safetensors = "/oss/opensources_model/Qwen3-1.7B/"
 
-        self.checkpoint_cfg.save_path = "./checkpoints/qwen3_1p5b_rlvr_math"
+        self.checkpoint_cfg.save_path = "/oss/checkpoints/qwen3_1p5b_rlvr_math"
         self.checkpoint_cfg.save_interval = 50
 
     def entrypoint(self):

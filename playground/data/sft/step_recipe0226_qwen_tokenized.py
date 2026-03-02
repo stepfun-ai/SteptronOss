@@ -14,17 +14,17 @@ from steptronoss.exp.sft import SFTDataConfig
 class Recipe0226DatasetsConfig(CompiledDatasetsConfig):
     compiled_recipe = CompiledDataRecipe(
         domains={
-            "code": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/code",
-            "math": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/math",
-            "science": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/science",
-            "swe_agentic": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/swe_agentic",
-            "toolcall": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/toolcall",
-            "general": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/general",
-            "hot_fix": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/hot_fix",
-            "logic": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/logic",
-            "dr": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/dr",
-            "long_context": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/long_context",
-            "vc": "/mnt/shared-storage/tenant/zhy/step_data_0226_qwen/vc",
+            "code": "/oss/data/step3p5_sft_data/step_data_0226_qwen/code",
+            "math": "/oss/data/step3p5_sft_data/step_data_0226_qwen/math",
+            "science": "/oss/data/step3p5_sft_data/step_data_0226_qwen/science",
+            "swe_agentic": "/oss/data/step3p5_sft_data/step_data_0226_qwen/swe_agentic",
+            "toolcall": "/oss/data/step3p5_sft_data/step_data_0226_qwen/toolcall",
+            "general": "/oss/data/step3p5_sft_data/step_data_0226_qwen/general",
+            "hot_fix": "/oss/data/step3p5_sft_data/step_data_0226_qwen/hot_fix",
+            "logic": "/oss/data/step3p5_sft_data/step_data_0226_qwen/logic",
+            "dr": "/oss/data/step3p5_sft_data/step_data_0226_qwen/dr",
+            "long_context": "/oss/data/step3p5_sft_data/step_data_0226_qwen/long_context",
+            "vc": "/oss/data/step3p5_sft_data/step_data_0226_qwen/vc",
         },
         epochs={
             "code": 3,

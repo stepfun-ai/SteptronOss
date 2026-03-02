@@ -14,10 +14,6 @@ class OneNodeResourceConfig(TorchrunResourceConfig):
         super().__init__()
         self.replica = 1
         self.gpu = 8
-        self.mounts.extend([
-            "juicefs+s3://oss.i.shaipower.com/step2-alignment-jfs:/mnt/step2-alignment-jfs",
-            "juicefs+s3://oss.i.shaipower.com/tenant:/mnt/shared-storage/tenant",
-        ])
 
 
 class Exp(SFTExp):

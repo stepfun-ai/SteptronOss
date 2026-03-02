@@ -13,12 +13,6 @@ from torch.nn import functional as F
 
 from steptronoss.core.parallel_state import PM
 from steptronoss.core.tensor_parallel import checkpoint
-
-# from steptron.core import parallel_state as mpu
-# from steptron.core.tensor_parallel import get_custom_tp_communicator
-# from steptron.core.tensor_parallel.custom_layers import (
-#     pre_function_backward as activation_backward,
-# )
 from steptronoss.core.tensor_parallel.mappings import (
     gather_from_sequence_parallel_region,
     reduce_from_tensor_model_parallel_region,
@@ -362,7 +356,7 @@ class MoEBlock(nn.Module):
     def forward_experts_ep(self, x, token_expert_ids, token_weights):
         assert PM.size_of("ETP") == 1
         # scatter_index = index_compute(token_expert_ids, experts_histogram)
-        from steptronoss.model.deepep.token_dispatcher import TorchA2ADispatcher
+        from steptronoss.model.ep_dispatcher.token_dispatcher import TorchA2ADispatcher
 
         dispatcher = TorchA2ADispatcher("EP", num_experts=self.cfg.moe_num_experts)
 
