@@ -47,6 +47,8 @@ cfshow playground/rlvr/qwen3_1p5b_rlvr_math.py
 - Start here: [LAUNCH_EXPERIMENTS](LAUNCH_EXPERIMENTS.md)
 - Launch guide (EN): [LAUNCH_EXPERIMENTS](LAUNCH_EXPERIMENTS.md)
 - Launch guide (ZH): [LAUNCH_EXPERIMENTS_ZH](LAUNCH_EXPERIMENTS_ZH.md)
+- SFT 数据准备: [SFT_DATA_PREPARATION](SFT_DATA_PREPARATION.md)
+- SFT Data Preparation (EN): [SFT_DATA_PREPARATION_EN](SFT_DATA_PREPARATION_EN.md)
 - Memory tuning (ZH): [MEMORY_TUNE](MEMORY_TUNE.md)
 - Memory tuning (EN): [MEMORY_TUNE_EN](MEMORY_TUNE_EN.md)
 - API modules: [MODULES](MODULES.md)

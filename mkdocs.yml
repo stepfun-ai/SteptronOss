@@ -9,6 +9,8 @@ copyright: Maintained by <a href="https://Randomizez.com">Randomizez</a>.
 
 nav:
   - Home: index.md
+  - SFT Data Preparation: SFT_DATA_PREPARATION.md
+  - SFT Data Preparation (EN): SFT_DATA_PREPARATION_EN.md
   - Modules: MODULES.md
 plugins:
   - search

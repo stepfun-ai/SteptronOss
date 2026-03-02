@@ -21,19 +21,21 @@ def validate_environment(rsc_cfg: ResourceConfig) -> list[str]:
     """
     errors = []
 
-    # Check multi-node requirements
-    if rsc_cfg.replica > 1:
-        if "EXP_ID" not in os.environ:
-            errors.append(
-                "Multi-node training (replica > 1) requires EXP_ID to be set.\n"
-                "  Run on ALL nodes: export EXP_ID=<same-id>"
-            )
+    # mp_run is single-node only
+    if rsc_cfg.replica != 1:
+        errors.append(
+            "mp_run only supports single-node experiments (resource_cfg.replica must be 1).\n"
+            "  Use tools/build_scripts.py for multi-node runs."
+        )
+        return errors
 
-        meet_dir = os.environ.get("STEPTRON_MEET_DIR")
-        if not meet_dir:
+    # Also ensure no task overrides request multi-node replicas
+    for task_name, task_spec in rsc_cfg.find_leaf_task_specs().items():
+        if task_spec.get("replica", 1) != 1:
             errors.append(
-                "Multi-node training requires STEPTRON_MEET_DIR for Redis rendezvous.\n"
-                "  Run: export STEPTRON_MEET_DIR=/path/to/shared/filesystem"
+                "mp_run only supports single-node experiments (task replica must be 1).\n"
+                f"  Task '{task_name}' sets replica={task_spec.get('replica')}.\n"
+                "  Use tools/build_scripts.py for multi-node runs."
             )
 
     return errors

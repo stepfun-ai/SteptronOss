@@ -1,3 +1,20 @@
+StepTronOSS is a lightweight training framework for large-scale language models with a focus on modular configs, reproducible experiments, and fast iteration across SFT, RLVR, and evaluation workflows. It can run with only PyTorch as a dependency, while also supporting operator-level replacements for acceleration.
+
+Key capabilities:
+- Config-driven experiments with dynamic validation (`cfshow`, `sanity_check`)
+- Multi-task orchestration with flexible launch tooling
+- Extensible data/optimizer/model stacks for rapid research iteration
+
+Chinese version: `README_ZH.md`
+
+## Docs
+
+- Launch guide (EN): `docs/LAUNCH_EXPERIMENTS.md`
+- Launch guide (ZH): `docs/LAUNCH_EXPERIMENTS_ZH.md`
+- SFT data prep (ZH): `docs/SFT_DATA_PREPARATION.md`
+- SFT data prep (EN): `docs/SFT_DATA_PREPARATION_EN.md`
+- API modules: `docs/MODULES.md`
+
 ## Installation
 
 ```bash
@@ -5,11 +22,9 @@
 uv sync
 ```
 
-### Optional: Optimization Kernels
-
-See the **Optimization Kernels** section for installation and enablement.
-
 ## Getting Started
+
+All commands below assume the uv virtual environment is activated. If not, prefix with `uv run`.
 
 ### Experiment Overview & Sanity Check
 
@@ -37,8 +52,7 @@ tools/mp_run.py playground/sft/your_exp.py
 tools/mp_run.py playground/rlvr/qwen3_1p5b_rlvr_math.py profiler_cfg.timing_log_level=1
 ```
 
-See `docs/LAUNCH_EXPERIMENTS.md` for a detailed launch guide (with a Chinese version in
-`docs/LAUNCH_EXPERIMENTS_ZH.md`).
+See the docs section above for detailed launch guides.
 
 ### Generate Multi-Node Launch Scripts
 
@@ -112,7 +126,18 @@ class A:
         pass
 ```
 
+## AI Native
+
+StepTronOSS enables an AI-native workflow: its modular architecture supports easy verification and iterative development, while tools like `cfshow` provide dynamic config inspection and validation. The repo also ships with `AGENTS.md` to guide agents in contributing to code changes.
+
+Try asking your agent:
+```
+write an exp of qwen3 8B sft, optimizer use muon
+```
+
 ## Optimization Kernels
+
+Only needed when you want maximum GPU performance and kernel-level speedups.
 
 ### flash-attn
 
@@ -141,3 +166,11 @@ set_optimization(
     grouped_gemm="nv_grouped_gemm",
 )
 ```
+
+## Project Status
+
+- [x] SFT exps
+- [x] Reference configs: Qwen3 8B `playground/pretrain/qwen3/qwen3_8.py`, Step3.5 Flash `playground/pretrain/step3p5/step3p5_flash.py`
+- [ ] Eval
+- [ ] RLVR implementation
+- [ ] Triton kernel implementation
