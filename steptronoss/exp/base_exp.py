@@ -504,7 +504,17 @@ class BaseExp(Config):
         return writer
 
     def sanity_check(self):
-        expected_world_size = self.resource_cfg.replica * max(self.resource_cfg.gpu, 1)
+        # Determine actual available GPUs considering CUDA_VISIBLE_DEVICES
+        cuda_visible = os.getenv("CUDA_VISIBLE_DEVICES")
+        if cuda_visible is not None:
+            actual_gpus = len(cuda_visible.split(","))
+            logger.warning(
+                f"CUDA_VISIBLE_DEVICES is set to '{cuda_visible}', "
+                f"using {actual_gpus} GPU(s) instead of resource_cfg.gpu={self.resource_cfg.gpu}"
+            )
+        else:
+            actual_gpus = self.resource_cfg.gpu
+        expected_world_size = self.resource_cfg.replica * max(actual_gpus, 1)
         os.environ["WORLD_SIZE"] = os.environ.get(
             "WORLD_SIZE", str(expected_world_size)
         )  # for workspace check, fake the expected world_size
