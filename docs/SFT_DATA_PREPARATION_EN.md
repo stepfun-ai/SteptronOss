@@ -110,7 +110,7 @@ Notes:
 - `subsample_rate` must be in (0, 1] for downsampling.
 - `epochs`: sampling plan (epoch weight per domain), consistent with Megatron-LM parameter semantics.
 
-  > For example, if `general` has 1000 samples (epoch weight=2) and `math` has 500 samples (epoch weight=1), the compiled dataset will contain 1000\*2+500\*1 samples in total.
+  > For example, `general` has 1000 samples with subsample_rate=0.3, epochs=2; `math` has 500 samples with default settings. The `DatasetsConfig` contains `1000*0.3+500` entries, which are then weighted-sampled in the dataloader, ultimately producing `1000*0.3*2+500*1` samples.。
 
 ## 3) (Optional) Compile Datasets
 
