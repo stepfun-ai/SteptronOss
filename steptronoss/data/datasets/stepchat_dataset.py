@@ -114,7 +114,7 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
             origin_len = 0
 
             with smart_open(f_path, "rb") as f:
-                for _ in ijson.items(f, "item", use_float=True):
+                for _ in ijson.items(f, "conversations", use_float=True):
                     origin_len += 1
             raw_indices = random.Random(1234).sample(range(origin_len), int(origin_len * sample_rate))
             raw_indices = {idx: i for i, idx in enumerate(raw_indices)}
@@ -122,7 +122,7 @@ class StepChatJsonDataset(torch.utils.data.Dataset):
 
         with smart_open(f_path, "rb") as f:
             idx = -1
-            for item in ijson.items(f, "item", use_float=True):
+            for item in ijson.items(f, "conversations", use_float=True):
                 idx += 1
                 if 0.0 < sample_rate < 1.0 and idx not in raw_indices:
                     continue
