@@ -19,15 +19,13 @@ This document explains how to organize SFT data and use it for training. Referen
 Minimal structure (field names are for schema reference only; no real content):
 
 ```json
-[
-  {
-    "conversations": [
-      {"role": "user", "content": "..."},
-      {"role": "assistant", "content": "..."}
-    ],
-    "images": null
-  }
-]
+{
+  "conversations": [
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "..."}
+  ],
+  "images": null
+}
 ```
 
 More detailed item structure (field names are for schema reference only; no real content):

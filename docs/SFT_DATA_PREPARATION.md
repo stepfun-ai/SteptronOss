@@ -19,15 +19,13 @@
 最小结构示意（字段名仅作结构参考，不包含具体内容）：
 
 ```json
-[
-  {
-    "conversations": [
-      {"role": "user", "content": "..."},
-      {"role": "assistant", "content": "..."}
-    ],
-    "images": null
-  }
-]
+{
+  "conversations": [
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "..."}
+  ],
+  "images": null
+}
 ```
 
 更详细的 item 结构示意（字段名仅作结构参考，不包含具体内容）：
