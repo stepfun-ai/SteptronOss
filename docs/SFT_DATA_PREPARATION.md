@@ -107,8 +107,10 @@ class MyDatasetsConfig(CompliableDatasetsConfig):
 
 说明：
 - `domains`：按域组织文件列表（每个文件是 `DataSourceFile`）。
-- `epochs`：采样策略（按域设置 epoch 权重）。
 - `subsample_rate` 范围为 (0, 1]，用于下采样。
+- `epochs`：采样策略（按域设置 epoch 权重），和 `Megatron-LM`参数语义保持一致。
+
+  > 例如 `general` 有 1000 条数据；`math` 有 500 条数据，编译后生成的数据集共 `1000*2+500*1` 条。
 
 ## 3) （可选）编译 datasets
 

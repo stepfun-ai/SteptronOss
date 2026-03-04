@@ -107,8 +107,10 @@ class MyDatasetsConfig(CompliableDatasetsConfig):
 
 Notes:
 - `domains`: per-domain file lists (each file is a `DataSourceFile`).
-- `epochs`: sampling plan (epoch weight per domain).
 - `subsample_rate` must be in (0, 1] for downsampling.
+- `epochs`: sampling plan (epoch weight per domain), consistent with Megatron-LM parameter semantics.
+
+  > For example, if `general` has 1000 samples (epoch weight=2) and `math` has 500 samples (epoch weight=1), the compiled dataset will contain 1000\*2+500\*1 samples in total.
 
 ## 3) (Optional) Compile Datasets
 
