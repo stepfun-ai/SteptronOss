@@ -435,13 +435,13 @@ class Checkpointer:
             state_dicts["optimizer"] = this_rank_data["optimizer"]
 
         # Scheduler
-        sched_exists = "opt_param_scheduler" in this_rank_data
+        sched_exists = "scheduler" in this_rank_data
         logger.info(
             f"sched: [{'√' if cfg.load_option.scheduler else '×'}] [{'√' if sched_exists else '×'}]",
             at=0,
         )
         if cfg.load_option.scheduler and sched_exists:
-            state_dicts["scheduler"] = this_rank_data["opt_param_scheduler"]
+            state_dicts["scheduler"] = this_rank_data["scheduler"]
 
         # load data dump w/ torch is extremely slow, use pickle later, but keep backward compatibility
         data_path = os.path.join(path, "data.pkl")
