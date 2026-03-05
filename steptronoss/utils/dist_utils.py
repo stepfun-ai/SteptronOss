@@ -93,7 +93,7 @@ def _convert_tensor(tensors, rank, src_rank, inp_tensor_obj: T, group, move_to_c
             return inp_tensor_obj
         else:
             return new_obj
-    elif isinstance(tensors, tuple) and tensors[0] == "@@tensor_info":
+    elif isinstance(tensors, tuple) and tensors and tensors[0] == "@@tensor_info":
         _, shape, dtype, is_cuda = tensors
         if rank != src_rank:
             _tensor = torch.empty(shape, dtype=dtype, device=torch.cuda.current_device())
@@ -104,7 +104,7 @@ def _convert_tensor(tensors, rank, src_rank, inp_tensor_obj: T, group, move_to_c
         if not is_cuda and not move_to_cuda:
             _tensor = _tensor.to("cpu")
         return _tensor
-    elif isinstance(tensors, tuple) and tensors[0] == "@@dataclass":
+    elif isinstance(tensors, tuple) and tensors and tensors[0] == "@@dataclass":
         new_obj = tensors[1](
             **_convert_tensor(
                 tensors[2],
