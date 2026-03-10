@@ -51,6 +51,13 @@ def _build_router(monkeypatch, upstream):
     return router
 
 
+class _CapturingClientSession:
+    def __init__(self, *, timeout, connector):
+        self.timeout = timeout
+        self.connector = connector
+        self.closed = False
+
+
 def test_vllm_router_streaming(monkeypatch):
     upstream = _FakeUpstream(
         status=200,
@@ -82,3 +89,25 @@ def test_vllm_router_non_stream(monkeypatch):
     assert response.status_code == 200
     assert response.content == body
     assert upstream.released is True
+
+
+@pytest.mark.anyio
+async def test_vllm_router_uses_no_additional_upstream_timeout(monkeypatch):
+    captured = {}
+
+    def _client_session_factory(*, timeout, connector):
+        session = _CapturingClientSession(timeout=timeout, connector=connector)
+        captured["session"] = session
+        return session
+
+    monkeypatch.setattr("steptronoss.generation.vllm.vllm_router.aiohttp.ClientSession", _client_session_factory)
+
+    router = VLLMRouter(VLLMRouterConfig())
+    session = await router._get_session()
+    assert session is captured["session"]
+    assert session.timeout.total is None
+    assert session.timeout.connect is None
+    assert session.timeout.sock_connect is None
+    assert session.timeout.sock_read is None
+    assert session.connector.limit == 0
+    assert session.connector.limit_per_host == 0

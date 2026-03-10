@@ -101,7 +101,21 @@ class VLLMRouter:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=None)
+            # A client-side HTTP timeout is not part of the proxied request, so
+            # the closest transparent behavior is to avoid imposing any extra
+            # router-side timeout and let the original client decide. Also
+            # remove aiohttp's default 100-connection pool cap; otherwise the
+            # router itself becomes the hidden global concurrency bottleneck
+            # before requests ever reach vLLM.
+            self._session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit=0, limit_per_host=0),
+                timeout=aiohttp.ClientTimeout(
+                    total=None,
+                    connect=None,
+                    sock_connect=None,
+                    sock_read=None,
+                ),
+            )
         return self._session
 
     def _make_proxy(self, route_name: str):

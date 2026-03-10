@@ -1,17 +1,17 @@
 import asyncio
 import multiprocessing as mp
 import threading
-import time
+from collections import deque
 from collections.abc import Callable, Iterable
 from queue import Empty, Queue
-from typing import Any, NoReturn, Optional
+from typing import Any, NoReturn
 from uuid import uuid4
 
 from loguru import logger
 from tqdm import tqdm
 
 from steptronoss.exp.rl import EnvTrajectory
-from steptronoss.generation.base_generatable import TrainableItem
+from steptronoss.generation.base_generatable import GenableItem, TrainableItem
 from steptronoss.utils import run_async
 
 
@@ -27,9 +27,11 @@ class SingleGenerationController:
         self._worker.start()
 
     @staticmethod
-    async def work_on_item(item: TrainableItem, callback, for_train) -> NoReturn:
+    async def work_on_item(item: GenableItem, callback, for_train) -> NoReturn:
         try:
             if for_train:
+                if not isinstance(item, TrainableItem):
+                    raise TypeError(f"Expected TrainableItem for training generation, got {type(item).__name__}")
                 result = await item.generate_for_train()
             else:
                 result = await item.generate()
@@ -37,13 +39,15 @@ class SingleGenerationController:
             import traceback
 
             logger.error("\n".join(traceback.format_exception(e)))
-            result = e
+            # Plain RuntimeError is safer to pass between worker processes than
+            # arbitrary exception subclasses with custom state.
+            result = RuntimeError(f"{type(e).__name__}: {e}")
 
         callback(item, result)
 
     def generate(
-        self, gen_items: list[TrainableItem], for_train: bool = False
-    ) -> Iterable[tuple[TrainableItem, list[EnvTrajectory] | Any]]:
+        self, gen_items: list[GenableItem], for_train: bool = False
+    ) -> Iterable[tuple[GenableItem, list[EnvTrajectory] | Any]]:
         out_queue = Queue()
         for item in gen_items:
             self.input_queue.put((item, lambda a, b: out_queue.put((a, b)), for_train))
@@ -54,9 +58,9 @@ class SingleGenerationController:
 
     def submit_with_callback(
         self,
-        genable: TrainableItem,
+        genable: GenableItem,
         for_train=False,
-        callback: Callable[[tuple[TrainableItem, Any]], NoReturn] | None = None,
+        callback: Callable[[tuple[GenableItem, Any]], NoReturn] | None = None,
         task_meta: dict | None = None,
     ) -> NoReturn:
         if callback is None:
@@ -113,11 +117,27 @@ def _generation_worker_process(input_queue: mp.Queue, result_queue: mp.Queue) ->
 
 
 class GenerationController:
-    def __init__(self, num_workers: int | None = None):
+    def __init__(
+        self,
+        num_workers: int | None = None,
+        max_concurrent_genables: int | None = None,
+    ):
         self.num_workers = num_workers or mp.cpu_count()
+        if max_concurrent_genables is not None and max_concurrent_genables < 1:
+            raise ValueError("max_concurrent_genables must be >= 1")
+        self.max_concurrent_genables = max_concurrent_genables
         self.input_queue = mp.Queue()
         self.result_queue = mp.Queue()
         self.callback_map = {}
+        self._pending_submissions: deque[tuple[GenableItem, str, bool]] = deque()
+        self._inflight_task_ids: set[str] = set()
+        self._state_lock = threading.Lock()
+        self._tqdm_disabled = False
+        self._tqdm_total: int | None = None
+        self._tqdm_desc = "Cumulative Completed"
+        self._tqdm_customized = False
+        self._progress_bar = None
+        self._completed_count = 0
 
         self._alive = True
 
@@ -136,20 +156,65 @@ class GenerationController:
         self.callback_thread = threading.Thread(target=self._callback_loop, daemon=True)
         self.callback_thread.start()
 
+    def set_tqdm(self, disabled: bool, total: int, desc: str) -> None:
+        if total < 0:
+            raise ValueError(f"Expected total >= 0, got {total}")
+        with self._state_lock:
+            self._tqdm_disabled = disabled
+            self._tqdm_total = total
+            self._tqdm_desc = desc
+            self._tqdm_customized = True
+            self._close_progress_bar_locked()
+
     def _callback_loop(self):
         """在主进程的主线程中运行的回调处理循环"""
-        pbar = tqdm(desc="Cumulative Completed")
-
         while self._alive:
             task_id, item, result = self.result_queue.get()
-            assert task_id in self.callback_map
-            callback = self.callback_map.pop(task_id)
+            with self._state_lock:
+                assert task_id in self.callback_map
+                callback = self.callback_map.pop(task_id)
+                self._inflight_task_ids.discard(task_id)
+                self._dispatch_pending_locked()
             callback(item, result)
-            pbar.update()
+            with self._state_lock:
+                pbar = self._get_or_create_progress_bar_locked()
+                self._completed_count += 1
+                if pbar is not None:
+                    pbar.update()
+
+    def _close_progress_bar_locked(self) -> None:
+        if self._progress_bar is not None:
+            self._progress_bar.close()
+            self._progress_bar = None
+
+    def _get_or_create_progress_bar_locked(self):
+        if self._tqdm_disabled:
+            self._close_progress_bar_locked()
+            return None
+        if self._progress_bar is None:
+            self._progress_bar = tqdm(
+                total=self._tqdm_total,
+                desc=self._tqdm_desc,
+                initial=self._completed_count,
+                disable=self._tqdm_disabled,
+            )
+        return self._progress_bar
+
+    def _can_dispatch_locked(self) -> bool:
+        return self.max_concurrent_genables is None or len(self._inflight_task_ids) < self.max_concurrent_genables
+
+    def _dispatch_pending_locked(self) -> None:
+        # Limit how many genables are handed to worker processes at once. This
+        # enforces a controller-wide in-flight cap even though each worker keeps
+        # its own local asyncio queue.
+        while self._pending_submissions and self._can_dispatch_locked():
+            genable, task_id, for_train = self._pending_submissions.popleft()
+            self._inflight_task_ids.add(task_id)
+            self.input_queue.put((genable, task_id, for_train))
 
     def generate(
-        self, gen_items: list[TrainableItem], for_train: bool = False
-    ) -> Iterable[tuple[TrainableItem, list[EnvTrajectory] | Any]]:
+        self, gen_items: list[GenableItem], for_train: bool = False
+    ) -> Iterable[tuple[GenableItem, list[EnvTrajectory] | Any]]:
         """批量生成方法（保持原有接口）"""
         out_queue = Queue()
         task_ids = list(range(len(gen_items)))
@@ -169,22 +234,24 @@ class GenerationController:
 
     def submit_with_callback(
         self,
-        genable: TrainableItem,
+        genable: GenableItem,
         for_train: bool = False,
-        callback: Callable[[tuple[TrainableItem, Any]], NoReturn] | None = None,
+        callback: Callable[[tuple[GenableItem, Any]], NoReturn] | None = None,
+        task_id: str | None = None,
     ) -> NoReturn:
         """提交单个任务（支持自定义回调）"""
         if callback is None:
             callback = print
 
         # 生成唯一任务ID
-        task_id = str(uuid4())
+        if task_id is None:
+            task_id = str(uuid4())
 
-        # 保存回调函数（将在主线程执行）
-        self.callback_map[task_id] = callback
-
-        # 将任务发送给工作进程
-        self.input_queue.put((genable, task_id, for_train))
+        with self._state_lock:
+            # 保存回调函数（将在主线程执行）
+            self.callback_map[task_id] = callback
+            self._pending_submissions.append((genable, task_id, for_train))
+            self._dispatch_pending_locked()
 
     def shutdown(self):
         """关闭控制器"""
@@ -202,3 +269,5 @@ class GenerationController:
 
         # 等待回调线程结束
         self.callback_thread.join(timeout=0.5)
+        with self._state_lock:
+            self._close_progress_bar_locked()

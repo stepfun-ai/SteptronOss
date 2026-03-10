@@ -14,8 +14,37 @@ from typing import TypeVar
 import torch
 from configurize import DataClass
 from loguru import logger
+from tqdm import tqdm
 
 T = TypeVar("Any")
+
+
+class GroupedProgressBar:
+    def __init__(self, totals: dict[str, int]):
+        self.total_bar = tqdm(
+            total=sum(totals.values()),
+            desc="All Groups",
+            position=0,
+            dynamic_ncols=True,
+        )
+        self.group_bars = {
+            name: tqdm(
+                total=total,
+                desc=name,
+                position=position,
+                dynamic_ncols=True,
+            )
+            for position, (name, total) in enumerate(totals.items(), start=1)
+        }
+
+    def update(self, name: str) -> None:
+        self.total_bar.update()
+        self.group_bars[name].update()
+
+    def close(self) -> None:
+        self.total_bar.close()
+        for group_bar in self.group_bars.values():
+            group_bar.close()
 
 
 def safediv(n, d):

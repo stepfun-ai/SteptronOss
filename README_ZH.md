@@ -175,6 +175,6 @@ set_optimization(
 
 - [x] SFT exps
 - [x] Reference configs: Qwen3 8B `playground/pretrain/qwen3/qwen3_8.py`, Step3.5 Flash `playground/pretrain/step3p5/step3p5_flash.py`
-- [ ] Eval
+- [x] Eval
 - [ ] RLVR 实现
-- [ ] Triton kernel 实现
+- [x] Triton kernel 实现

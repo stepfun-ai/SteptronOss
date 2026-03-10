@@ -7,7 +7,6 @@ import aiohttp
 import requests
 from aiohttp.client_exceptions import ClientConnectionError
 from loguru import logger
-from vllm.entrypoints.openai.protocol import CompletionRequest, CompletionResponse
 
 from steptronoss.exp.inference import VLLMDeployConfig
 from steptronoss.utils.comm_utils import block_get_redis, get_exp_redis
@@ -108,24 +107,30 @@ class VLLMClient:
     def wait_for_server(self, timeout: int = 3600) -> list[str]:
         """Wait till all vLLM servers ready or timeout; return endpoints list."""
         exp_redis = get_exp_redis()
-        expected_replica = block_get_redis(exp_redis, f"VLLM_NUM_WORKERS_OF_{self.cfg.model_name}")
+        expected_replica = block_get_redis(
+            exp_redis,
+            f"VLLM_NUM_WORKERS_OF_{self.cfg.model_name}",
+            timeout=timeout,
+        )
         expected_replica = int(expected_replica)
 
         start_time = time.time()
         while time.time() - start_time < timeout:
             endpoints = self.get(f"{self._router_addr}/get_info")
             endpoint_addrs = [ep["endpoint"] for ep in endpoints]
+            logger.info(f"[wait_for_server] {len(endpoint_addrs)}/{expected_replica} endpoints ready: {endpoint_addrs}")
             if self.check_server_alive() and len(endpoints) >= expected_replica:
-                logger.info(f"[wait_for_server] All {len(endpoint_addrs)} endpoints ready: {endpoint_addrs}")
                 assert len(endpoint_addrs) == len(set(endpoint_addrs)), "Duplicate endpoints found in endpoint_addrs"
                 return endpoint_addrs
             time.sleep(max(2, timeout / 1200))
         raise TimeoutError("VLLM wait server timeout!")
 
-    def completion(self, prompt_or_request: str | list[int] | CompletionRequest, max_tokens=None) -> CompletionResponse:
+    def completion(self, prompt_or_request: str | list[int] | dict[str, Any], max_tokens=None) -> dict[str, Any]:
         """发送聊天完成请求进行测试"""
-        if isinstance(prompt_or_request, CompletionRequest):
+        if hasattr(prompt_or_request, "model_dump"):
             payload = prompt_or_request.model_dump()
+        elif isinstance(prompt_or_request, dict):
+            payload = prompt_or_request.copy()
         else:
             payload = {"prompt": prompt_or_request, "return_token_ids": True}
         payload["model"] = self.cfg.model_name
@@ -135,7 +140,7 @@ class VLLMClient:
             url=f"{self._router_addr}/v1/completions",
             json=payload,
         )
-        return CompletionResponse(**result)
+        return result
 
     async def _get_model_endpoints(self) -> list[str]:
         """获取所有模型端点的IP和端口"""

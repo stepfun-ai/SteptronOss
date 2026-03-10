@@ -219,6 +219,7 @@ class Exp(BaseExp):
             moe_weighted_gather="triton",
             TokenDispatcher="deep_ep",
             grouped_gemm="nv_grouped_gemm",
+            # grouped_gemm="function_imple", # slower fallback
             AttentionCore="flash-attn-3",
         )
 

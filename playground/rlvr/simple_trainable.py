@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 from collections.abc import Callable
 from typing import Any
@@ -42,8 +44,14 @@ class SimpleTrainable(TrainableItem):
         self.gt = gt
         self.endpoint_getter = endpoint_getter
         self.model_name_getter = model_name_getter
-        self.sampling_params = sampling_params
         self.max_tokens = max_tokens
+        self.sampling_params = {
+            "temperature": 1.0,
+            "top_p": 1.0,
+            "top_k": -1,
+            "max_tokens": max_tokens,
+        }
+        self.sampling_params.update(sampling_params)
 
     @staticmethod
     def _extract_boxed(answer: str) -> str:
@@ -69,12 +77,23 @@ class SimpleTrainable(TrainableItem):
             timeout=aiohttp.ClientTimeout(total=7200.0),
         ) as response:
             response = await response.json()
-
+        if "choices" not in response:
+            raise ValueError(f"Unexpected vLLM response: {response}")
         choice = response["choices"][0]
         return {
             "choice": choice,
             "prompt": self.prompt_text,
         }
+
+    def fingerprint(self) -> str:
+        payload = {
+            "genable_type": type(self).__name__,
+            "prompt": self.prompt_text,
+            "sampling_params": self.sampling_params,
+        }
+        serialized_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest()
+        return f"{type(self).__name__}:v1:{digest}"
 
     async def generate_for_train(self):
         generated = await self.generate()

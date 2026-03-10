@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from configurize import Config, Ref
+from loguru import logger
 
 
 class BaseInferenceConfig(Config):
@@ -11,15 +12,6 @@ class BaseInferenceConfig(Config):
     """max decode steps (gen tokens), if None, use max_seq_len - prompt_len"""
     max_cache_size = 64
     """Inference Decode BatchSize, max_num_seqs for paged attention"""
-
-    temperature: float = 1.0
-    top_p: float = 1.0
-    top_k: int = 0
-
-    eos_ids: list[int] = []
-    """stop if tokens[-1] == eos_id. (work for generate only)"""
-    stop_strings: str | list[str] = []
-    """stop if trajectory.endswith(any_of(stop_string))"""
 
     shuffle_all_samples = True
     """shuffle all generated samples after finish generation."""
@@ -78,26 +70,17 @@ class VLLMDeployConfig(BaseInferenceConfig):
     vllm_hf_overrides: dict = {}
     """The hf_overrides to use to override the model config in huggingface for vLLM."""
 
-    vllm_sampling_params: dict = {}
-    """The sampling params to use for vLLM."""
-
     vllm_mtp_num_tokens: int = 0
     vllm_mtp_method: str = ""
     """The method to use for vLLM MTP."""
 
     def sanity_check(self):
-        """Validate configuration parameters.
-
-        Validates that resource_cfg.gpu is evenly divisible by inference_tp.
-        This ensures mp_run can create equal-sized processes.
-
-        Examples:
-        - ✓ gpu=8, inference_tp=2: 8 % 2 = 0 (4 processes)
-        - ✓ gpu=8, inference_tp=4: 8 % 4 = 0 (2 processes)
-        - ✓ gpu=8, inference_tp=8: 8 % 8 = 0 (1 process, standard deployment)
-        - ✗ gpu=8, inference_tp=3: 8 % 3 ≠ 0 (invalid)
-        """
         super().sanity_check()
+        if torch.cuda.is_available():
+            if self.vllm_dp * self.vllm_tp != (gpus := torch.cuda.device_count()):
+                logger.warning(
+                    f"Using DP={self.vllm_dp} & TP={self.vllm_tp} for vLLM, but detected {gpus} GPU on node!"
+                )
 
         if self.enable_auto_tool_choice:
             assert self.toolcall_parser
@@ -185,37 +168,6 @@ class VLLMDeployConfig(BaseInferenceConfig):
         cmd = " ".join(cmd)
 
         return cmd, envs
-
-    def get_sampling_params(self, override_params: dict = {}):
-
-        # Handle top_k
-        self.top_k = self.top_k
-        if self.top_k <= 0:
-            self.top_k = -1
-
-        # Handle stop strings
-        stop_strings = self.stop_strings
-        if stop_strings is not None:
-            if isinstance(stop_strings, str):
-                stop_strings = [stop_strings]
-            if isinstance(stop_strings, list) and len(stop_strings) == 0:
-                stop_strings = None
-
-        # Handle stop token ids
-        eos_ids = self.eos_ids
-        if len(eos_ids) == 0:
-            eos_ids = None
-
-        sampling_params = dict(
-            temperature=self.temperature,
-            top_p=self.top_p,
-            top_k=self.top_k,
-            stop=stop_strings,
-            stop_token_ids=eos_ids,
-        )
-        sampling_params.update(self.vllm_sampling_params)
-        sampling_params.update(override_params)
-        return sampling_params
 
     def deploy_training_model(self, models: list[torch.nn.Module]):
 

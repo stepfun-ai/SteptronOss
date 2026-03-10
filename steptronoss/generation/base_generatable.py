@@ -15,6 +15,17 @@ class GenableItem(ABC):
     async def generate(self) -> Any:
         pass
 
+    def fingerprint(self) -> str:
+        """Return a stable cache fingerprint for this generation request.
+
+        Subclasses that participate in persistent generation caching should
+        override this method and return a deterministic string. The default
+        implementation keeps existing non-cache call sites working while making
+        unsupported cache usage fail explicitly.
+        """
+
+        raise NotImplementedError(f"{type(self).__name__} must implement fingerprint() for generation caching")
+
 
 class TrainableItem(GenableItem):
     @abstractmethod
