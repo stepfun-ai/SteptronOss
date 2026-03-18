@@ -152,6 +152,7 @@ Improve pass:
 
 - After creating or editing an experiment:
   - run `cfshow <exp.py>` to inspect the config tree
+  - for nested playground files, use `PYTHONPATH=/data/SteptronOss cfshow <exp.py>` so imports like `from playground...` resolve
   - make sure `sanity_check()` passes
   - run `mypy <exp.py>`
 - If experiment B is derived from experiment A, use `cfshow` diff to verify changes.
@@ -218,6 +219,7 @@ Improve pass:
   - return `OnlineReshaper(scripts)`
 - For expert slicing from per-expert keys:
   - use `Inverse(UnbindMoE(...)) + KeepThisEP()` before TP ops
+- For research-only Qwen variants that add extra parameters, subclass `steptronoss.model.qwen_dense.QwenModel` to reuse the HF reshaper, and set `checkpoint_cfg.strict_load_model = False` when loading a base Qwen checkpoint that lacks the new params.
 
 ## 7. RLVR Priors
 
@@ -252,6 +254,7 @@ Improve pass:
 
 - `rg` may be unavailable; fall back to `find` / `grep`
 - `python` may be missing and `python3` may not include `pytest`; prefer project tooling if available
+- For compiled SFT datasets under `/oss/data/recipe_*`, prefer repo `.venv/bin/python` and `.venv/bin/torchrun`.
 - `tests/conftest.py` now applies a shared skip to every `@pytest.mark.node2` test unless the run is launched under `torchrun --nproc-per-node=2`; plain `pytest` should skip them instead of hanging in distributed init.
 
 ### GPU test notes
@@ -269,3 +272,4 @@ Improve pass:
 - If training hangs on `Waiting for debugger... ip: ... rank: 56`, check for a stray `debug(56)` in `steptronoss/core/trainers/lm_trainer.py`
 - TorchDynamo graph breaks are often triggered by `Tensor.item()` in optimizable helpers; prefer tensor-safe checks like masked `amax` + `torch._assert`
 - `steptronoss/model/common/rope.py` should keep RoPE cos/sin caches and cache-generation math in `torch.float32`; module-wide `.to()/cuda()/bfloat16()` may move the cache device, but must not downcast the cache dtype.
+- For scratch-init MoE research variants, do not only initialize `module.weight`; `GroupedExperts` stores expert matrices as named parameters `w1` / `w2` on the module. Missing those leaves `torch.empty(...)` garbage in expert weights and can cause immediate NaNs on the first iteration.
