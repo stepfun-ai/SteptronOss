@@ -85,25 +85,27 @@ class AIME25Benchmark(JsonlChatBenchmark):
         return response.strip()
 
     @staticmethod
-    def _is_correct(result: Generated, answer: str) -> bool:
+    def _gold_answer(result: Generated) -> str:
+        answer = result.case.benchmark.context.get("answer")
+        return answer.strip() if isinstance(answer, str) else str(answer).strip()
+
+    @classmethod
+    def _is_correct(cls, result: Generated) -> bool:
         if result.error:
             return False
-        predicted_raw = AIME25Benchmark._extract_answer(result.response)
-        predicted = AIME25Benchmark._normalize_answer_text(predicted_raw)
-        normalized_answer = AIME25Benchmark._normalize_answer_text(answer)
+        answer = cls._gold_answer(result)
+        predicted_raw = cls._extract_answer(result.response)
+        predicted = cls._normalize_answer_text(predicted_raw)
+        normalized_answer = cls._normalize_answer_text(answer)
         if predicted == normalized_answer:
             return True
-        return AIME25Benchmark._math_verify_equal(predicted_raw, answer)
+        return cls._math_verify_equal(predicted_raw, answer)
 
     def evaluate(self, results: list[Generated]) -> BaseMetric:
-        def _gold_answer(result: Generated) -> str:
-            answer = result.case.benchmark.context.get("answer")
-            return answer.strip() if isinstance(answer, str) else str(answer).strip()
-
-        sample_values = [1.0 if self._is_correct(result, _gold_answer(result)) else 0.0 for result in results]
+        sample_values = [1.0 if self._is_correct(result) else 0.0 for result in results]
         return self._build_metric(
             results=results,
             sample_values=sample_values,
             sample_per_prompt=self.sample_per_prompt,
-            is_success_fn=lambda result: self._is_correct(result, _gold_answer(result)),
+            is_success_fn=self._is_correct,
         )

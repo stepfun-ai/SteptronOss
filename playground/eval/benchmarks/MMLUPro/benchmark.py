@@ -9,9 +9,9 @@ class MMLUProBenchmark(GPQADiamondBenchmark):
 
     _OPTION_PATTERN = re.compile(r"(?<![a-zA-Z0-9_])[A-I](?![a-zA-Z0-9_])")
 
-    @staticmethod
-    def _is_correct(result: Generated, answer: str) -> bool:
+    @classmethod
+    def _is_correct(cls, result: Generated) -> bool:
         if result.error:
             return False
-        predicted = MMLUProBenchmark._extract_choice(result.response)
-        return predicted == answer.strip().upper()
+        predicted = cls._extract_choice(result.response)
+        return predicted == cls._gold_answer(result).upper()

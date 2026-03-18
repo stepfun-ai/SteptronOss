@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import random
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -160,13 +159,7 @@ class IFBenchBenchmark(JsonlChatBenchmark):
                     context,
                 ))
             self._records_cache = records
-        records = list(self._records_cache)
-        if self.shuffle_prompts:
-            rng = random.Random(1234)
-            rng.shuffle(records)
-        if self.down_sample_to is not None:
-            records = records[: self.down_sample_to]
-        return records
+        return super()._load_records()
 
     def get_cases(self):
         cases = super().get_cases()

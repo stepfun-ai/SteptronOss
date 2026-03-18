@@ -36,9 +36,9 @@ class Step3p5TokenizerConfig(TokenizerConfig):
     """Tokenizer directory for the target Step3.5 model family."""
 
     def build_tokenizer(self) -> ChatTokenizer:
-        from transformers import AutoTokenizer
+        from steptronoss.tokenizer.hf_compat_tokenizer import load_hf_tokenizer
 
-        return AutoTokenizer.from_pretrained(self.tokenizer_path, trust_remote_code=True)
+        return load_hf_tokenizer(self.tokenizer_path, trust_remote_code=True)
 
 
 class Step3p5SimpleEvalResourceConfig(ResourceConfig):
@@ -85,7 +85,7 @@ class Step3p5SimpleEvalVLLMDeployConfig(VLLMDeployConfig):
     def __init__(self):
         super().__init__()
         self.model_config_path = "/oss/checkpoints/step3_flash_sft_step3_data_muon/it4716/hf_vllm/"
-        self.tokenizer_path = "/oss/tokenizers/step3p5_flash_sft/"
+        self.tokenizer_path = "/oss/tokenizers/Step3.5Flash-SFT-Tokenizer/"
         self.reasoning_parser = "step3p5"
         self.max_seq_len = 128 * 1024
         self.vllm_gpu_memory_utilization = 0.9

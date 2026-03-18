@@ -69,6 +69,14 @@ class SimpleChatGeneratable(GenableItem):
         resolved_max_tokens = remaining_context
         if sampling_params.max_tokens is not None:
             resolved_max_tokens = min(sampling_params.max_tokens, remaining_context)
+            if resolved_max_tokens < sampling_params.max_tokens:
+                logger.warning(
+                    "Clamped generation budget for "
+                    f"{self.case.benchmark.benchmark_name}:{self.case.benchmark.item_id} "
+                    f"from max_tokens={sampling_params.max_tokens} to {resolved_max_tokens} "
+                    f"because prompt_token_count={prompt.prompt_token_count} leaves only "
+                    f"{remaining_context} tokens under max_model_len={max_model_len}."
+                )
         resolved_sampling_params = SamplingParams(
             temperature=sampling_params.temperature,
             top_p=sampling_params.top_p,

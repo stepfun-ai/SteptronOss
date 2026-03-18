@@ -410,3 +410,32 @@ def test_generate_rejects_duplicate_fingerprints(tmp_path):
 
     with pytest.raises(ValueError, match="Duplicate generation fingerprint detected"):
         cfg._generate([genable_a, genable_b])
+
+
+def test_simple_chat_generatable_warns_when_context_budget_is_clamped(monkeypatch):
+    warning_messages: list[str] = []
+    monkeypatch.setattr(simple_eval.logger, "warning", lambda message: warning_messages.append(message))
+
+    case = EvaluationCase(
+        prompt=Prompt(
+            messages=[{"role": "user", "content": "clamped prompt"}],
+            prompt_token_count=1018,
+        ),
+        benchmark=BenchmarkMeta(
+            benchmark_name="bench",
+            item_id="item-0",
+            context={"item_id": "item-0"},
+        ),
+        evaluation=EvaluationMeta(prompt_index=0, run_index=0),
+    )
+
+    genable = _CountingSimpleChatGeneratable(
+        case=case,
+        response_text="ok",
+        call_counter={},
+    )
+
+    assert genable.case.prompt.sampling_params is not None
+    assert genable.case.prompt.sampling_params.max_tokens == 6
+    assert len(warning_messages) == 1
+    assert "Clamped generation budget" in warning_messages[0]

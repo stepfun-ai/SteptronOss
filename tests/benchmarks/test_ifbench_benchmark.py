@@ -175,3 +175,23 @@ def test_ifbench_metric_includes_official_strict_and_loose_reports(tmp_path):
     assert strict_metric.score_avg == 0.25
     assert strict_metric.to_dict()["evaluation_mode"] == "strict"
     assert strict_metrics == loose_metrics
+
+
+def test_ifbench_load_records_reuses_parent_shuffle_and_downsample(tmp_path):
+    resource_root = tmp_path / "datasets" / "IFBENCH"
+    resource_root.mkdir(parents=True)
+    _write_official_style_prompt_file(resource_root / "IFBench_test.jsonl")
+
+    benchmark = IFBenchBenchmark(
+        data_path=str(resource_root),
+        tokenizer=DummyTokenizer(),
+        sample_per_prompt=1,
+        shuffle_prompts=True,
+        down_sample_to=1,
+    )
+
+    records = benchmark._load_records()
+
+    assert len(records) == 1
+    assert records[0][0] == "IFBENCH"
+    assert records[0][1][0]["role"] == "user"
