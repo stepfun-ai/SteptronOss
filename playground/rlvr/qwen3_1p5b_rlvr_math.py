@@ -107,9 +107,9 @@ class Qwen3TokenizerConfig(TokenizerConfig):
     tokenizer_path: str = "/oss/opensources_model/Qwen3-1.7B/"
 
     def build_tokenizer(self):
-        from transformers import AutoTokenizer
+        from steptronoss.tokenizer.hf_compat_tokenizer import load_hf_tokenizer
 
-        return AutoTokenizer.from_pretrained(self.tokenizer_path, trust_remote_code=True)
+        return load_hf_tokenizer(self.tokenizer_path, trust_remote_code=True)
 
 
 class TinyRLVRResourceConfig(ResourceConfig):

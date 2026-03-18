@@ -175,11 +175,10 @@ class Recipe0311DatasetsConfig(CompliableDatasetsConfig):
         return StepChatJsonDataset(filelist=filelist, template=template)
 
     def get_template(self):
-        from transformers import AutoTokenizer
-
         from steptronoss.data.chat_templates.text_template import HuggingFaceTemplate
+        from steptronoss.tokenizer.hf_compat_tokenizer import load_hf_tokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_path)
+        tokenizer = load_hf_tokenizer(self.tokenizer_path)
         return HuggingFaceTemplate(tokenizer=tokenizer)
 
 
