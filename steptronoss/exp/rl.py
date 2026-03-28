@@ -455,7 +455,7 @@ class FlowControllerConfig(Config):
     save_path: str = Ref("...checkpoint_cfg.save_path")
     """Checkpoint directory for persisting flow state."""
 
-    async_strategy: Literal["on-policy", "one-step-off", "fully-async"]
+    async_strategy: Literal["on-policy", "one-step-off"]
     """Rollout scheduling strategy."""
 
     genable_allow_errors: bool = False
@@ -464,23 +464,38 @@ class FlowControllerConfig(Config):
     prompt_per_iter: int
     """Number of prompts scheduled per training iteration."""
 
-    max_untrained_prompts: int | None = None
-    """Max pending prompts for fully-async flow control."""
-
-    max_staleness: int | None = None
-    """Max staleness steps for fully-async flow control."""
-
     def sanity_check(self):
         super().sanity_check()
         assert self.vllm_cfg.hot_path is not None
-        if self.async_strategy in ["fully-async"]:
-            assert self.max_untrained_prompts is not None
-            assert self.max_staleness is not None
 
     def build_flow_controller(self):
         from steptronoss.core.generators.flow_controller import SimpleFlowController
 
         return SimpleFlowController(flow_cfg=self)
+
+
+class FullyAsyncFlowControllerConfig(FlowControllerConfig):
+    async_strategy: Literal["fully-async"]
+    """Rollout scheduling strategy."""
+
+    max_untrained_prompts: int
+    """Max pending prompts for fully-async flow control."""
+
+    max_staleness: int
+    """Max staleness steps for fully-async flow control."""
+
+    def __init__(self):
+        super().__init__()
+        self.async_strategy = "fully-async"
+
+    def sanity_check(self):
+        super().sanity_check()
+        assert self.max_untrained_prompts + 1 >= self.prompt_per_iter
+
+    def build_flow_controller(self):
+        from steptronoss.core.generators.flow_controller import FullyAsyncFlowController
+
+        return FullyAsyncFlowController(flow_cfg=self)
 
 
 class PPOLikeTrainerConfig(TrainerConfig):
