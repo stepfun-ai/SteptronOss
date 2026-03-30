@@ -68,7 +68,9 @@ class SimpleFlowController(FlowController):
         if PM.world_rank == 0:
             self.vllm_client = self.cfg.vllm_cfg.build_cli()
 
-            self.generator = GenerationController()
+            self.generator = GenerationController(
+                max_concurrent_genables=self.cfg.max_concurrent_genables,
+            )
 
             self.flow = PersistentFlow(
                 source=PersistentSource(nextable=dataloader),
@@ -318,7 +320,11 @@ class FullyAsyncFlowController(FlowController):
         if PM.world_rank == 0:
             self.vllm_client = self.vllm_cfg.build_cli()
             self.generator = GenerationController(
-                max_concurrent_genables=self.cfg.max_untrained_prompts,
+                max_concurrent_genables=(
+                    self.cfg.max_concurrent_genables
+                    if self.cfg.max_concurrent_genables is not None
+                    else self.cfg.max_untrained_prompts
+                ),
             )
             self.flow = PersistentFlow(
                 source=PersistentSource(nextable=dataloader),

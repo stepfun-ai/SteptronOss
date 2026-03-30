@@ -158,6 +158,7 @@ def test_fully_async_controller_smoke(monkeypatch):
     cfg.prompt_per_iter = 2
     cfg.max_untrained_prompts = 2
     cfg.max_staleness = 2
+    cfg.max_concurrent_genables = 1
     cfg.vllm_cfg.build_cli = lambda: DummyVLLMClient()
     cfg.vllm_cfg.deploy_training_model = lambda model: None
     monkeypatch.setattr(
@@ -170,6 +171,7 @@ def test_fully_async_controller_smoke(monkeypatch):
         dataloader=FakeNextable([FakeTrainableItem(i, 0.01 + i * 0.01) for i in range(4)]),
         model=[],
     )
+    assert controller.generator.max_concurrent_genables == 1
 
     batch0 = controller.get_train_samples()
     controller.weight_dumped()
@@ -178,6 +180,25 @@ def test_fully_async_controller_smoke(monkeypatch):
     assert [traj.meta["item_id"] for traj in batch0] == [0, 1]
     assert [traj.meta["item_id"] for traj in batch1] == [2, 3]
     assert controller.train_weight_version == 1
+
+
+def test_simple_controller_forwards_max_concurrent_genables(monkeypatch):
+    cfg = build_cfg("one-step-off")
+    cfg.max_concurrent_genables = 1
+    cfg.vllm_cfg.build_cli = lambda: DummyVLLMClient()
+    cfg.vllm_cfg.deploy_training_model = lambda model: None
+    monkeypatch.setattr(
+        "steptronoss.core.generators.flow_controller.GenerationController",
+        FakeGenerationController,
+    )
+
+    controller = cfg.build_flow_controller()
+    controller.start(
+        dataloader=FakeNextable([FakeTrainableItem(i, 0.01 + i * 0.01) for i in range(2)]),
+        model=[],
+    )
+
+    assert controller.generator.max_concurrent_genables == 1
 
 
 def test_fully_async_controller_rejects_deadlocking_config():

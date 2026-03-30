@@ -94,6 +94,21 @@ def test_on_policy_waits_for_next_weight_before_next_block():
     ]
 
 
+def test_simple_strategies_honor_explicit_max_concurrent_limit():
+    cfg, controller = build_controller("one-step-off", prompt_per_iter=4)
+
+    result = simulate_flow_controller(
+        cfg,
+        infer_costs=[1, 2, 3, 4],
+        train_cost=0,
+        max_concurrent=2,
+    )
+
+    assert result.blocks[0].infer_concurrency == (2, 2, 2, 2, 1, 1)
+    assert result.blocks[0].ready_time == 6
+    assert result.infer_timeline == ["2", "2", "2", "2", "1", "1", "Y"]
+
+
 def test_simulated_dataloader_is_restored_after_simulation():
     cfg, controller = build_controller("one-step-off", prompt_per_iter=2)
     dataloader = SimulatedFlowDataloader([2, 1, 2])
@@ -185,6 +200,23 @@ def test_fully_async_backpressure_limits_untrained_prompts():
     assert launch_times[1] == 1
     assert launch_times[2] >= result.train_batches[0].start_time
     assert launch_times[3] >= result.train_batches[0].start_time
+
+
+def test_fully_async_max_concurrent_advances_all_running_prompts_each_tick():
+    cfg, controller = build_controller("fully-async", prompt_per_iter=2)
+    cfg.max_untrained_prompts = 8
+    cfg.max_staleness = 8
+
+    result = simulate_flow_controller(
+        cfg,
+        infer_costs=[3, 3],
+        train_cost=0,
+        max_concurrent=2,
+    )
+
+    assert [trace.completion_time for trace in result.prompt_traces] == [3, 3]
+    assert result.train_batches[0].start_time == 3
+    assert result.infer_timeline == ["2", "2", "2", "Y"]
 
 
 def test_fully_async_staleness_blocks_next_update_until_long_tail_finishes():

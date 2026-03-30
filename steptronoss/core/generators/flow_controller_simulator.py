@@ -41,7 +41,13 @@ uv run python steptronoss/core/generators/flow_controller_simulator.py \
   --max_concurrent 4
 ```
 
-For `fully-async`, the simulator assumes:
+The optional `max_concurrent` flag applies to every strategy:
+
+- omitted / `None`: treat infer as having enough slots for all currently
+  dispatchable prompts
+- positive integer: infer may advance at most that many prompts concurrently
+
+For `fully-async`, the simulator additionally assumes:
 
 - `prompt_per_iter`: how many ready prompts one train step consumes
 - `max_untrained_prompts`: how many prompts infer may keep in
@@ -52,6 +58,25 @@ For `fully-async`, the simulator assumes:
 
 Also note that the current fully-async model rejects obviously deadlocking
 configs where `max_untrained_prompts + 1 < prompt_per_iter`.
+
+Balanced Base-Cost Regime
+-------------------------
+When you want a clean baseline where train and infer tie in steady state before
+adding long-tail noise, choose a constant per-prompt infer cost that satisfies:
+
+```text
+ceil(prompt_per_iter / max_concurrent) * infer_cost == train_cost
+```
+
+Example: with `prompt_per_iter=10`, `train_cost=500`, and `max_concurrent=10`,
+setting every genable cost to `500` makes the infer side produce one full batch
+every `500` ticks in steady state. That gives a useful baseline for comparing:
+
+- no jitter: `one-step-off` and `fully-async` should tie
+- centered signed jitter: per-prompt costs become `base_cost + jitter_i`, where
+  positive and negative jitter cancel in expectation
+- long-tail comparison: if `fully-async` is useful, it should keep more steps
+  near the train-cost floor while `one-step-off` is pulled up by block maxima
 
 How to read `render`
 --------------------
@@ -135,6 +160,7 @@ class FlowSimulationBlock:
     index: int
     required_version: int
     infer_costs: tuple[int, ...]
+    infer_concurrency: tuple[int, ...]
     request_time: int
     sync_time: int
     gen_start: int
@@ -265,11 +291,11 @@ class FlowControllerSimulator:
         infer_costs: Sequence[int] | None = None,
         train_cost: int = 0,
         dataloader: Nextable | None = None,
-        max_concurrent: int = 1,
+        max_concurrent: int | None = None,
     ) -> FlowSimulationResult:
         if train_cost < 0:
             raise ValueError(f"train_cost must be >= 0, got {train_cost}")
-        if max_concurrent < 1:
+        if max_concurrent is not None and max_concurrent < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 
         items = self._materialize_items(infer_costs=infer_costs, dataloader=dataloader)
@@ -289,7 +315,11 @@ class FlowControllerSimulator:
                 max_concurrent=max_concurrent,
             )
 
-        blocks = self._build_blocks(genable_costs=genable_costs, train_cost=train_cost)
+        blocks = self._build_blocks(
+            genable_costs=genable_costs,
+            train_cost=train_cost,
+            max_concurrent=max_concurrent,
+        )
         train_timeline, infer_timeline = self._render_timelines(blocks=blocks)
         return FlowSimulationResult(
             strategy=self.flow_cfg.async_strategy,
@@ -320,7 +350,7 @@ class FlowControllerSimulator:
         items: list[SimulatedGenableItem],
         genable_costs: list[int],
         train_cost: int,
-        max_concurrent: int,
+        max_concurrent: int | None,
     ) -> FlowSimulationResult:
         if self.flow_cfg.max_untrained_prompts is None:
             raise ValueError("fully-async simulation requires flow_cfg.max_untrained_prompts")
@@ -408,20 +438,23 @@ class FlowControllerSimulator:
             infer_token = str(len(running)) if running else "N"
 
             if running:
-                active = running.popleft()
-                active.remaining -= 1
-                if active.remaining == 0:
-                    trace = FullyAsyncPromptTrace(
-                        item_id=active.item_id,
-                        infer_cost=active.infer_cost,
-                        launched_version=active.launched_version,
-                        launch_time=trace_meta[active.item_id]["launch_time"],
-                        completion_time=current_time + 1,
-                    )
-                    completed_traces.append(trace)
-                    pre_train.append(trace)
-                else:
-                    running.append(active)
+                next_running: deque[_RunningGenable] = deque()
+                while running:
+                    active = running.popleft()
+                    active.remaining -= 1
+                    if active.remaining == 0:
+                        trace = FullyAsyncPromptTrace(
+                            item_id=active.item_id,
+                            infer_cost=active.infer_cost,
+                            launched_version=active.launched_version,
+                            launch_time=trace_meta[active.item_id]["launch_time"],
+                            completion_time=current_time + 1,
+                        )
+                        completed_traces.append(trace)
+                        pre_train.append(trace)
+                    else:
+                        next_running.append(active)
+                running.extend(next_running)
 
             train_tokens.append(train_token)
             infer_tokens.append(infer_token)
@@ -485,7 +518,12 @@ class FlowControllerSimulator:
             dataloader.load_state_dict(snapshot)
         return items
 
-    def _build_blocks(self, genable_costs: list[int], train_cost: int) -> list[FlowSimulationBlock]:
+    def _build_blocks(
+        self,
+        genable_costs: list[int],
+        train_cost: int,
+        max_concurrent: int | None,
+    ) -> list[FlowSimulationBlock]:
         prompt_per_iter = self.flow_cfg.prompt_per_iter
         blocks: list[FlowSimulationBlock] = []
         sync_times: dict[int, int] = {}
@@ -496,11 +534,15 @@ class FlowControllerSimulator:
             request_time = 0 if block_index == 0 else blocks[-1].train_end
             sync_times[block_index] = request_time
             sync_time = sync_times[required_version]
+            infer_duration, infer_concurrency = self._simulate_parallel_window(
+                infer_costs=infer_costs,
+                max_concurrent=max_concurrent,
+            )
             gen_start = max(
                 blocks[-1].ready_time if blocks else 0,
                 sync_time,
             )
-            ready_time = gen_start + (max(infer_costs) if infer_costs else 0)
+            ready_time = gen_start + infer_duration
             yield_time = max(request_time, ready_time)
             train_start = yield_time
             train_end = train_start + train_cost
@@ -509,6 +551,7 @@ class FlowControllerSimulator:
                     index=block_index,
                     required_version=required_version,
                     infer_costs=infer_costs,
+                    infer_concurrency=infer_concurrency,
                     request_time=request_time,
                     sync_time=sync_time,
                     gen_start=gen_start,
@@ -520,6 +563,40 @@ class FlowControllerSimulator:
             )
 
         return blocks
+
+    @staticmethod
+    def _simulate_parallel_window(
+        infer_costs: Sequence[int],
+        max_concurrent: int | None,
+    ) -> tuple[int, tuple[int, ...]]:
+        if not infer_costs:
+            return 0, ()
+
+        waiting = deque(int(cost) for cost in infer_costs)
+        running: deque[int] = deque()
+        concurrency: list[int] = []
+        limit = len(infer_costs) if max_concurrent is None else max_concurrent
+
+        while waiting and len(running) < limit:
+            cost = waiting.popleft()
+            if cost > 0:
+                running.append(cost)
+
+        while running:
+            concurrency.append(len(running))
+            next_running: deque[int] = deque()
+            while running:
+                remaining = running.popleft() - 1
+                if remaining > 0:
+                    next_running.append(remaining)
+            running = next_running
+
+            while waiting and len(running) < limit:
+                cost = waiting.popleft()
+                if cost > 0:
+                    running.append(cost)
+
+        return len(concurrency), tuple(concurrency)
 
     def _required_version(self, block_index: int) -> int:
         strategy = self.flow_cfg.async_strategy
@@ -538,9 +615,13 @@ class FlowControllerSimulator:
         trace_meta: dict[int, dict[str, int]],
         current_version: int,
         current_time: int,
-        max_concurrent: int,
+        max_concurrent: int | None,
     ) -> None:
-        while source and len(running) < max_concurrent and self._can_dispatch_fully_async(pre_train, running):
+        while (
+            source
+            and (max_concurrent is None or len(running) < max_concurrent)
+            and self._can_dispatch_fully_async(pre_train, running)
+        ):
             item = source.popleft()
             trace_meta[item.item_id] = {
                 "launch_time": current_time,
@@ -629,7 +710,7 @@ class FlowControllerSimulator:
 
         for block in blocks:
             for offset, current_time in enumerate(range(block.gen_start, block.ready_time)):
-                infer_by_time[current_time] = str(sum(cost > offset for cost in block.infer_costs))
+                infer_by_time[current_time] = str(block.infer_concurrency[offset])
 
             for current_time in range(block.train_start, block.train_end):
                 train_by_time[current_time] = "T"
@@ -664,7 +745,7 @@ def simulate_flow_controller(
     infer_costs: Sequence[int] | None = None,
     train_cost: int = 0,
     dataloader: Nextable | None = None,
-    max_concurrent: int = 1,
+    max_concurrent: int | None = None,
 ) -> FlowSimulationResult:
     simulator = FlowControllerSimulator(flow_cfg=flow_cfg)
     return simulator.simulate(
@@ -717,7 +798,7 @@ class FlowControllerSimulatorCLI:
         prompt_per_iter: int,
         train_cost: int,
         genables: Any,
-        max_concurrent: int = 1,
+        max_concurrent: int | None = None,
         max_untrained_prompts: int | None = None,
         max_staleness: int | None = None,
     ) -> str:

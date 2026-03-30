@@ -464,9 +464,17 @@ class FlowControllerConfig(Config):
     prompt_per_iter: int
     """Number of prompts scheduled per training iteration."""
 
+    max_concurrent_genables: int | None = None
+    """Optional client-side in-flight cap for generation requests.
+
+    Size it according to the available inference-side capacity, for example
+    the number of serving replicas and each server's `max_num_seqs` / batching limit.
+    """
+
     def sanity_check(self):
         super().sanity_check()
         assert self.vllm_cfg.hot_path is not None
+        assert self.max_concurrent_genables is None or self.max_concurrent_genables >= 1
 
     def build_flow_controller(self):
         from steptronoss.core.generators.flow_controller import SimpleFlowController
