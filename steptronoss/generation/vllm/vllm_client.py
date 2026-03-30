@@ -148,27 +148,21 @@ class VLLMClient:
         return [ep["endpoint"] for ep in result]
 
     async def _update_and_reload_for_endpoint(self, endpoint: str, new_path: str | None = None) -> dict[str, Any]:
-        """为特定端点执行更新配置和重新加载权重的任务组合"""
-        overrides = {
-            "load_config": {"load_format": "auto"},
-        }
-        if new_path:
-            overrides.update({"model_config": {"model": new_path}})
+        """Reload weights for one endpoint without mutating ModelConfig in place.
 
-        await self.apost(
-            f"http://{endpoint}/collective_rpc",
-            json={
-                # "model": self.cfg.model_name,
-                "method": "update_config",
-                "kwargs": {"overrides": overrides},
-            },
-        )
-
+        vLLM 0.17.x exposes runtime-only attributes such as
+        `ModelConfig.attention_chunk_size` that are not dataclass fields. Calling
+        `update_config(model_config=...)` can therefore fail during the
+        dataclass-style replace path. Prefer passing `weights_path` directly to
+        `reload_weights(...)`, which already supports loading checkpoint-format
+        weights from an alternate directory.
+        """
         await self.apost(
             f"http://{endpoint}/collective_rpc",
             json={
                 # "model": self.cfg.model_name,
                 "method": "reload_weights",
+                "kwargs": {"weights_path": new_path} if new_path else {},
             },
         )
         await self.apost(f"http://{endpoint}/reset_prefix_cache", decode_json=False)
