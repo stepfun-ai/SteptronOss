@@ -1,6 +1,6 @@
 import threading
 import time
-from contextlib import nullcontext
+from queue import Queue
 
 import pytest
 
@@ -122,30 +122,33 @@ class FakeNextable:
 class FakeGenerationController:
     def __init__(self, max_concurrent_genables=None):
         self.max_concurrent_genables = max_concurrent_genables
-        self._sema = threading.Semaphore(max_concurrent_genables) if max_concurrent_genables is not None else None
+        worker_count = max_concurrent_genables or 1
+        self._queue: Queue = Queue()
+        self._workers = [threading.Thread(target=self._worker, daemon=True) for _ in range(worker_count)]
+        for worker in self._workers:
+            worker.start()
+
+    def _worker(self):
+        while True:
+            genable, callback = self._queue.get()
+            time.sleep(genable.delay_s)
+            callback(
+                genable,
+                [
+                    EnvTrajectory(
+                        trajectory=[genable.item_id],
+                        logprobs=[0.0],
+                        is_gen_mask=[True],
+                        meta={"item_id": genable.item_id},
+                        stop_type=0,
+                        raw_reward=1.0,
+                    )
+                ],
+            )
 
     def submit_with_callback(self, genable, for_train=False, callback=None, task_id=None):
         assert callback is not None
-
-        def worker():
-            cm = self._sema if self._sema is not None else nullcontext()
-            with cm:
-                time.sleep(genable.delay_s)
-                callback(
-                    genable,
-                    [
-                        EnvTrajectory(
-                            trajectory=[genable.item_id],
-                            logprobs=[0.0],
-                            is_gen_mask=[True],
-                            meta={"item_id": genable.item_id},
-                            stop_type=0,
-                            raw_reward=1.0,
-                        )
-                    ],
-                )
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._queue.put((genable, callback))
 
 
 class DummyVLLMClient:
