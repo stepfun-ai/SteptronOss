@@ -71,7 +71,11 @@ class HuggingFaceTemplate:
             "loss_mask": np.array(loss_mask, dtype=np.float16),
         }
 
+    def normalize_messages(self, messages):
+        return messages
+
     def apply_chat_template(self, messages, tokenize=True, tools=None):
+        messages = self.normalize_messages(messages)
         add_generation_prompt = False if messages[-1]["role"] == "assistant" else True
         if tools:
             tokenized = self.tokenizer.apply_chat_template(
@@ -87,3 +91,32 @@ class HuggingFaceTemplate:
         if isinstance(tokenized, list):
             return tokenized
         return tokenized["input_ids"]
+
+
+class GemmaTemplate(HuggingFaceTemplate):
+    """Adapt StepChat content parts to the Gemma chat-template schema."""
+
+    @staticmethod
+    def _normalize_content_part(part):
+        if not isinstance(part, dict):
+            return part
+        if part.get("type") != "text" or "text" in part or "value" not in part:
+            return part
+
+        normalized = dict(part)
+        normalized["text"] = normalized["value"]
+        return normalized
+
+    def normalize_messages(self, messages):
+        normalized_messages = []
+        for message in messages:
+            if not isinstance(message, dict):
+                normalized_messages.append(message)
+                continue
+
+            normalized_message = dict(message)
+            content = normalized_message.get("content")
+            if isinstance(content, list):
+                normalized_message["content"] = [self._normalize_content_part(part) for part in content]
+            normalized_messages.append(normalized_message)
+        return normalized_messages
