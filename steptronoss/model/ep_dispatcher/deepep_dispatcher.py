@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import cache, lru_cache
+
 import torch
 
 from steptronoss.core.parallel_state import PM
@@ -18,6 +20,52 @@ except Exception:
 def _get_hidden_bytes(x: torch.Tensor) -> int:
     # DeepEP uses at least bf16 (2 bytes) for tokens
     return x.size(1) * max(x.element_size(), 2)
+
+
+def _is_nvshmem_disabled_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "NVSHMEM is disable during compilation" in message or "NVSHMEM is disabled during compilation" in message
+
+
+def _get_rdma_buffer_size_hint(config, hidden_bytes: int, world_size: int, low_latency_mode: bool) -> int:
+    """Mirror DeepEP's intranode fast path for NVSHMEM-disabled builds.
+
+    On single-node groups (``world_size <= 8``), DeepEP's normal config path
+    would return zero RDMA bytes. However, when DeepEP is compiled with
+    ``DISABLE_NVSHMEM``, calling ``get_rdma_buffer_size_hint`` asserts before it
+    can return that zero. StepTron uses this helper so A800-safe no-NVSHMEM
+    builds can still use the intranode DeepEP path.
+    """
+    try:
+        return config.get_rdma_buffer_size_hint(hidden_bytes, world_size)
+    except Exception as exc:
+        if _is_nvshmem_disabled_error(exc) and not low_latency_mode and world_size <= 8:
+            return 0
+        raise
+
+
+@cache
+def get_deep_ep_dispatch_support(world_size: int) -> tuple[bool, str]:
+    """Probe whether the installed DeepEP build can run the token dispatcher.
+
+    Importing ``deep_ep`` alone is insufficient on some builds. In particular,
+    A800-safe builds that compile DeepEP with NVSHMEM disabled still import
+    successfully but assert once StepTron asks DeepEP for RDMA buffer hints.
+    Probe the same config path up front so experiment configs can fall back
+    before entering FWBW.
+    """
+    if not HAVE_DEEP_EP:
+        return False, "DeepEP is not importable in the current environment."
+
+    try:
+        config = Buffer.get_dispatch_config(world_size)
+        hidden_bytes = 4096 * 2
+        config.get_nvl_buffer_size_hint(hidden_bytes, world_size)
+        _get_rdma_buffer_size_hint(config, hidden_bytes, world_size, low_latency_mode=False)
+    except Exception as exc:
+        return False, str(exc)
+
+    return True, ""
 
 
 class DeepEPDispatcher:
@@ -45,6 +93,10 @@ class DeepEPDispatcher:
         self.rank = PM.rank_in(parallel)
         self.world_size = PM.size_of(parallel)
         self.group = PM.group_of(parallel)
+
+        is_supported, reason = get_deep_ep_dispatch_support(self.world_size)
+        if not is_supported:
+            raise RuntimeError(f"DeepEP token dispatcher is unavailable in the current environment. Reason: {reason}")
 
         self.num_experts = num_experts
         self.num_local_experts = num_experts // self.world_size
@@ -77,7 +129,10 @@ class DeepEPDispatcher:
             Buffer.get_combine_config(self.world_size),
         ):
             num_nvl_bytes = max(config.get_nvl_buffer_size_hint(hidden_bytes, self.world_size), num_nvl_bytes)
-            num_rdma_bytes = max(config.get_rdma_buffer_size_hint(hidden_bytes, self.world_size), num_rdma_bytes)
+            num_rdma_bytes = max(
+                _get_rdma_buffer_size_hint(config, hidden_bytes, self.world_size, self._low_latency_mode),
+                num_rdma_bytes,
+            )
 
         if (
             self._buffer is None
