@@ -21,19 +21,25 @@ def quick_gelu(x: torch.Tensor) -> torch.Tensor:
     return x * torch.sigmoid(1.702 * x)
 
 
-def _interpolate_positional_embedding(position_embedding: torch.Tensor, target_tokens: int) -> torch.Tensor:
+def _interpolate_positional_embedding(
+    position_embedding: torch.Tensor, target_tokens: int, *, use_cls_token: bool
+) -> torch.Tensor:
     if position_embedding.dim() == 2:
         position_embedding = position_embedding.unsqueeze(0)
 
     if position_embedding.shape[1] == target_tokens:
         return position_embedding
 
-    cls_token = position_embedding[:, :1]
-    grid = position_embedding[:, 1:]
+    if use_cls_token:
+        cls_token = position_embedding[:, :1]
+        grid = position_embedding[:, 1:]
+    else:
+        cls_token = None
+        grid = position_embedding
 
     source_tokens = grid.shape[1]
     source_size = math.isqrt(source_tokens)
-    target_grid_tokens = target_tokens - 1
+    target_grid_tokens = target_tokens - (1 if use_cls_token else 0)
     target_size = math.isqrt(target_grid_tokens)
 
     if source_size * source_size != source_tokens:
@@ -50,7 +56,9 @@ def _interpolate_positional_embedding(position_embedding: torch.Tensor, target_t
         align_corners=False,
     ).to(dtype)
     grid = grid.permute(0, 2, 3, 1).reshape(1, target_grid_tokens, -1)
-    return torch.cat([cls_token, grid], dim=1)
+    if use_cls_token:
+        return torch.cat([cls_token, grid], dim=1)
+    return grid
 
 
 class VisionTransformerParallelConfig(ParallelConfig):
@@ -105,6 +113,27 @@ class VisionTransformerConfig(Config):
 
     layer_scale_init_value: float | None = None
     """Optional residual layer-scale initialization."""
+
+    use_cls_token: bool = True
+    """Whether to prepend a learnable CLS token before the transformer."""
+
+    use_ln_pre: bool = False
+    """Whether to apply a pre-transformer layer norm to patch embeddings."""
+
+    patch_embed_bias: bool = True
+    """Whether the patch embedding convolution uses bias."""
+
+    vit_downsampler1_kernel_size: int = 2
+    """Kernel size for the first spatial downsampler."""
+
+    vit_downsampler1_padding: int = 0
+    """Padding for the first spatial downsampler."""
+
+    vit_downsampler2_kernel_size: int = 3
+    """Kernel size for the second spatial downsampler."""
+
+    vit_downsampler2_padding: int = 1
+    """Padding for the second spatial downsampler."""
 
     def build_model(self) -> VisionTransformer:
         return VisionTransformer(cfg=self)
@@ -264,48 +293,57 @@ class VisionTransformer(nn.Module):
             out_channels=cfg.hidden_size,
             kernel_size=cfg.patch_size,
             stride=cfg.patch_size,
-            bias=True,
+            bias=cfg.patch_embed_bias,
         )
-        self.class_embedding = nn.Parameter(torch.randn(cfg.hidden_size))
+        if cfg.use_cls_token:
+            self.class_embedding = nn.Parameter(torch.randn(cfg.hidden_size))
 
         self.num_patches = (cfg.image_size // cfg.patch_size) ** 2
-        self.positional_embedding = nn.Parameter(torch.randn(self.num_patches + 1, cfg.hidden_size))
+        self.positional_embedding = nn.Parameter(
+            torch.randn(self.num_patches + (1 if cfg.use_cls_token else 0), cfg.hidden_size)
+        )
+        self.ln_pre = nn.LayerNorm(cfg.hidden_size, eps=cfg.layernorm_epsilon) if cfg.use_ln_pre else nn.Identity()
 
         self.transformer = VisionBackbone(cfg)
 
         self.vit_downsampler1 = nn.Conv2d(
             cfg.hidden_size,
             cfg.vit_downsampler_hidden_dim,
-            kernel_size=2,
+            kernel_size=cfg.vit_downsampler1_kernel_size,
             stride=2,
+            padding=cfg.vit_downsampler1_padding,
             bias=True,
         )
         self.vit_downsampler2 = nn.Conv2d(
             cfg.vit_downsampler_hidden_dim,
             cfg.output_dim,
-            kernel_size=3,
+            kernel_size=cfg.vit_downsampler2_kernel_size,
             stride=2,
-            padding=1,
+            padding=cfg.vit_downsampler2_padding,
             bias=True,
         )
 
     def _build_embeddings(self, pixel_values: torch.Tensor) -> torch.Tensor:
         batch_size = pixel_values.shape[0]
         patch_embeddings = self.conv1(pixel_values).flatten(2).transpose(1, 2)
-        class_embedding = self.class_embedding.to(dtype=patch_embeddings.dtype, device=patch_embeddings.device)
-        class_embedding = class_embedding.expand(batch_size, 1, -1)
-
-        embeddings = torch.cat([class_embedding, patch_embeddings], dim=1)
+        if self.cfg.use_cls_token:
+            class_embedding = self.class_embedding.to(dtype=patch_embeddings.dtype, device=patch_embeddings.device)
+            class_embedding = class_embedding.expand(batch_size, 1, -1)
+            embeddings = torch.cat([class_embedding, patch_embeddings], dim=1)
+        else:
+            embeddings = patch_embeddings
         positional_embedding = _interpolate_positional_embedding(
             self.positional_embedding.to(dtype=embeddings.dtype, device=embeddings.device),
             embeddings.shape[1],
+            use_cls_token=self.cfg.use_cls_token,
         )
-        return embeddings + positional_embedding
+        return self.ln_pre(embeddings + positional_embedding)
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         x = self._build_embeddings(pixel_values)
         x = self.transformer(x)
-        x = x[:, 1:, :]
+        if self.cfg.use_cls_token:
+            x = x[:, 1:, :]
 
         batch_size, seq_len, hidden_size = x.shape
         side = math.isqrt(seq_len)
@@ -331,13 +369,21 @@ class VisionTransformer(nn.Module):
         )
 
         scripts = [
-            Script(src="class_embedding", op=Duplicate() + KeepThisTP(), dst="class_embedding"),
             Script(src="positional_embedding", op=Duplicate() + KeepThisTP(), dst="positional_embedding"),
             Script(src="conv1.weight", op=Duplicate() + KeepThisTP(), dst="conv1.weight"),
-            Script(src="conv1.bias", op=Duplicate() + KeepThisTP(), dst="conv1.bias"),
             Script(src="vit_downsampler1.*", op=Duplicate() + KeepThisTP(), dst="vit_downsampler1.*"),
             Script(src="vit_downsampler2.*", op=Duplicate() + KeepThisTP(), dst="vit_downsampler2.*"),
         ]
+
+        if hasattr(self, "class_embedding"):
+            scripts.insert(0, Script(src="class_embedding", op=Duplicate() + KeepThisTP(), dst="class_embedding"))
+        if self.conv1.bias is not None:
+            scripts.append(Script(src="conv1.bias", op=Duplicate() + KeepThisTP(), dst="conv1.bias"))
+        if not isinstance(self.ln_pre, nn.Identity):
+            scripts.extend([
+                Script(src="ln_pre.weight", op=Duplicate() + KeepThisTP(), dst="ln_pre.weight"),
+                Script(src="ln_pre.bias", op=Duplicate() + KeepThisTP(), dst="ln_pre.bias"),
+            ])
 
         for layer_id, _block in enumerate(self.transformer.resblocks):
             prefix = f"transformer.resblocks.{layer_id}"
