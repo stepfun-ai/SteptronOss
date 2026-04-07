@@ -9,7 +9,7 @@ import torch.distributed as dist
 
 from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import ParallelConfig
-from steptronoss.utils.dist_utils import all_to_all_objects
+from steptronoss.utils.dist_utils import all_to_all_objects, broadcast_tensors
 
 
 @dataclass(frozen=True)
@@ -54,15 +54,21 @@ class MeshConnector:
 
         self.src_tp_members = self._build_tp_members(self.src_rank_infos)
         self.dst_tp_members = self._build_tp_members(self.dst_rank_infos)
+        self.src_tp_groups = self._build_tp_groups(self.src_tp_members)
+        self.dst_tp_groups = self._build_tp_groups(self.dst_tp_members)
 
         gathered_source_flags = [None for _ in range(self.world_size)]
         dist.all_gather_object(gathered_source_flags, is_data_source)
 
         self.source_nodes = self._compile_source_nodes(gathered_source_flags)
+        self.sorted_source_nodes = sorted(
+            self.source_nodes, key=lambda node: (node.replica_id, node.pp_rank, node.cp_rank)
+        )
         self.canonical_source_node_by_replica = {
             replica_id: sorted(nodes, key=lambda node: (node.pp_rank, node.cp_rank))[0]
             for replica_id, nodes in self._group_nodes_by_replica(self.source_nodes).items()
         }
+        self.broadcast_source_rank = self._src_leader(self.sorted_source_nodes[0]) if self.sorted_source_nodes else None
 
         self.forward_targets = self._compile_forward_targets()
         self.backward_targets = self._compile_backward_targets()
@@ -71,7 +77,7 @@ class MeshConnector:
 
     def _describe_mesh(self, mesh: ParallelConfig) -> dict[int, _RankInfo]:
         with PM.use_mesh(mesh):
-            dp_groups = PM.world_ranks_of("DP")
+            mp_groups = PM.world_ranks_of("MP")
             pp_groups = PM.world_ranks_of("PP")
             cp_groups = PM.world_ranks_of("CP")
             tp_groups = PM.world_ranks_of("TP")
@@ -84,12 +90,12 @@ class MeshConnector:
 
         infos = {}
         for rank in range(self.world_size):
-            dp_replica, _ = _find(dp_groups, rank)
+            mp_replica, _ = _find(mp_groups, rank)
             _, pp_rank = _find(pp_groups, rank)
             _, cp_rank = _find(cp_groups, rank)
             _, tp_rank = _find(tp_groups, rank)
             infos[rank] = _RankInfo(
-                replica_id=dp_replica,
+                replica_id=mp_replica,
                 pp_rank=pp_rank,
                 cp_rank=cp_rank,
                 tp_rank=tp_rank,
@@ -110,6 +116,13 @@ class MeshConnector:
         for node in nodes:
             grouped.setdefault(node.replica_id, []).append(node)
         return grouped
+
+    def _build_tp_groups(self, members_by_node: dict[_NodeKey, list[int]]) -> dict[_NodeKey, dist.ProcessGroup | None]:
+        groups: dict[_NodeKey, dist.ProcessGroup | None] = {}
+        for node in sorted(members_by_node, key=lambda key: (key.replica_id, key.pp_rank, key.cp_rank)):
+            members = members_by_node[node]
+            groups[node] = None if len(members) == 1 else dist.new_group(members)
+        return groups
 
     def _compile_source_nodes(self, gathered_source_flags: list[bool]) -> set[_NodeKey]:
         source_nodes = set()
@@ -171,43 +184,27 @@ class MeshConnector:
         return _ShardMeta(batch_size=batch_size, shard_count=shard_count, shard_id=shard_id)
 
     def _slice_shard(self, data: torch.Tensor, meta: _ShardMeta) -> torch.Tensor:
-        split_size = math.ceil(meta.batch_size / meta.shard_count)
-        start = meta.shard_id * split_size
-        end = min(start + split_size, meta.batch_size)
+        base_size = meta.batch_size // meta.shard_count
+        extra = meta.batch_size % meta.shard_count
+        start = meta.shard_id * base_size + min(meta.shard_id, extra)
+        shard_size = base_size + (1 if meta.shard_id < extra else 0)
+        end = min(start + shard_size, meta.batch_size)
         if start >= meta.batch_size:
             return data.new_empty((0, *data.shape[1:]))
         return data[start:end].contiguous()
 
-    def _tp_fanout(self, payload, members: list[int], leader: int):
+    def _tp_fanout(self, payload, members: list[int], leader: int, group: dist.ProcessGroup | None):
         if len(members) == 1:
             return payload
-        group = dist.new_group(members)
         object_list = [payload if PM.world_rank == leader else None]
         dist.broadcast_object_list(object_list, src=leader, group=group)
         return object_list[0]
 
     def broadcast(self, data):
-        local_node = self._src_node(PM.world_rank)
-        local_members = self.src_tp_members[local_node]
-        local_leader = self._src_leader(local_node)
-        local_receives = local_node in self.source_nodes
-
-        def _payload_builder(dst_rank: int):
-            if PM.world_rank != local_leader or local_node not in self.source_nodes:
-                return None
-            dst_node = self._src_node(dst_rank)
-            if dst_node not in self.source_nodes:
-                return None
-            if self._src_leader(dst_node) != dst_rank:
-                return None
-            return data
-
-        recv = self._send(_payload_builder)
-        leader_payloads = [item for item in recv if item is not None]
-        leader_payload = leader_payloads[0] if leader_payloads else None
-        if not local_receives:
+        if self.broadcast_source_rank is None:
             return None
-        return self._tp_fanout(leader_payload, local_members, local_leader)
+        local_data = data if PM.world_rank == self.broadcast_source_rank else None
+        return broadcast_tensors(local_data, src_rank=self.broadcast_source_rank, group=None, move_to_cuda=False)
 
     def forward(self, data: torch.Tensor | None) -> torch.Tensor | None:
         local_src_node = self._src_node(PM.world_rank)
@@ -235,7 +232,7 @@ class MeshConnector:
         local_leader = self._dst_leader(local_dst_node)
 
         leader_payload = leader_payloads[0] if leader_payloads else None
-        payload = self._tp_fanout(leader_payload, local_members, local_leader)
+        payload = self._tp_fanout(leader_payload, local_members, local_leader, self.dst_tp_groups[local_dst_node])
         if payload is None:
             self._last_forward_meta = None
             return None
@@ -271,7 +268,8 @@ class MeshConnector:
 
         leader_payloads = [item for item in recv if item is not None]
         if PM.world_rank == local_leader:
-            shard_tensors = [payload["tensor"] for payload in leader_payloads]
+            target_device = data.device
+            shard_tensors = [payload["tensor"].to(target_device) for payload in leader_payloads]
             shard_metas = [payload["meta"] for payload in leader_payloads]
             shard_pairs = sorted(zip(shard_metas, shard_tensors, strict=False), key=lambda item: item[0].shard_id)
             if shard_pairs:
@@ -282,4 +280,4 @@ class MeshConnector:
                 restored = None
         else:
             restored = None
-        return self._tp_fanout(restored, local_members, local_leader)
+        return self._tp_fanout(restored, local_members, local_leader, self.src_tp_groups[local_src_node])

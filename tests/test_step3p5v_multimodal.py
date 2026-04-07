@@ -78,7 +78,7 @@ def test_vision_transformer_forward_shape(single_rank_gloo_dist):
     cfg.layer_scale_init_value = None
 
     PM.set_mesh(cfg.parallel_cfg)
-    model = cfg.build_model()
+    model = cfg.build_model().cpu()
     pixel_values = torch.randn(2, 3, 28, 28)
     with PM.use_mesh(cfg.parallel_cfg):
         output = model(pixel_values)

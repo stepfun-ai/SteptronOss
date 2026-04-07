@@ -51,7 +51,7 @@ class _CpuToyStep3p5vModel(Step3p5vModel):
         self.layers = nn.ModuleList()
         self.tok_embeddings = _CpuToyEmbedding(cfg)
         with PM.use_mesh(cfg.tok_embed_cfg.encoder_cfg.parallel_cfg):
-            self.encoder = cfg.tok_embed_cfg.encoder_cfg.build_model()
+            self.encoder = cfg.tok_embed_cfg.encoder_cfg.build_model().cpu()
         self.mesh_connector = MeshConnector(
             src_mesh=cfg.parallel_cfg,
             dst_mesh=cfg.tok_embed_cfg.encoder_cfg.parallel_cfg,

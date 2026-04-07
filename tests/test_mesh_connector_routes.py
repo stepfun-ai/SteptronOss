@@ -27,6 +27,7 @@ def _build_connectors(monkeypatch, src_infos, dst_infos, source_flags):
 
     monkeypatch.setattr(MeshConnector, "_describe_mesh", fake_describe_mesh)
     monkeypatch.setattr(mesh_connector_module.dist, "all_gather_object", fake_all_gather_object)
+    monkeypatch.setattr(mesh_connector_module.dist, "new_group", lambda members: tuple(members))
     monkeypatch.setattr(mesh_connector_module.PM, "world_size", len(src_infos), raising=False)
 
     connectors = []
