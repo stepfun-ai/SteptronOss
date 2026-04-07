@@ -164,6 +164,10 @@ Improve pass:
 - Some keys map indirectly:
   - `disable_qk_norm` ↔ `use_qk_norm` (inverted)
   - `use_swiglu_limit` ↔ `swiglu_limit`
+- For `ImageForInsert` multimodal embeddings with context parallel, do image insertion on the full embedding sequence first and only then call `scatter_to_balanced_cp_region(...)`; scattering `input_ids` before multimodal tok-embedding breaks insert-location alignment.
+- For `step3p5v`-style multimodal embeddings, run the vision encoder under `with PM.use_mesh(cfg.encoder_cfg.parallel_cfg): ...` so encoder-side TP/PP settings stay local and the outer language mesh is restored afterward.
+- `steptronoss/model/common/vit.py` is now a TP-sharded vision transformer: qkv / out projection and MLP use TP-partitioned linear layers, while patch embedding and downsamplers stay replicated.
+- In the current OSS `step3p5v` design, `ImageInsertInputEmbedding` is feature-only; raw `images` are encoded in `Step3p5vModel.forward()` via `MeshConnector(src_mesh, dst_mesh)` before the normal decoder forward runs.
 - If you change `num_layers`, keep all layer-wise lists in sync:
   - `qk_rope_head_dim`
   - `rope_theta`
@@ -289,6 +293,7 @@ Improve pass:
 
 - `rg` may be unavailable; fall back to `find` / `grep`
 - `python` may be missing and `python3` may not include `pytest`; prefer project tooling if available
+- Some tensor-parallel model builders allocate on CUDA unconditionally; for CPU-only smoke tests around Step3.* multimodal `forward_head` / reshaper behavior, prefer a thin toy wrapper that reuses the real model methods with CPU-safe fake embeddings instead of building the full model.
 - `tests/conftest.py` now applies a shared skip to every `@pytest.mark.node2` test unless the run is launched under `torchrun --nproc-per-node=2`; plain `pytest` should skip them instead of hanging in distributed init.
 
 ### GPU test notes

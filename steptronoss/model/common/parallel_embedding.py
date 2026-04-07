@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import torch
-from configurize import Config, Ref
+from configurize import Config, DataClass, Ref
 from loguru import logger
 
 from steptronoss.core import tensor_parallel
 from steptronoss.exp.base_exp import MegatronTPConfig
 from steptronoss.model.common.rms_norm import RMSNorm
+from steptronoss.model.common.vit import VisionTransformerConfig
 
 
 class InputEmbeddingConfig(Config):
@@ -78,6 +79,146 @@ class WordEmbedding(torch.nn.Module):
             embeddings = tensor_parallel.scatter_to_sequence_parallel_region(embeddings)
 
         return embeddings
+
+
+class ImageForInsert(DataClass):
+    insert_start_token: int
+    """Token id after which visual features are inserted."""
+
+    images: torch.FloatTensor | None = None
+    """Raw image tensor shaped [N, 3, H, W]."""
+
+    image_features: torch.FloatTensor | list[torch.FloatTensor] | None = None
+    """Optional precomputed features before the language projector."""
+
+    rope_cu_seqlens: torch.IntTensor | None = None
+    """Reserved for future multimodal RoPE variants."""
+
+    rope_max_seq_len: int | None = None
+    """Reserved for future multimodal RoPE variants."""
+
+
+class ImageInsertInputEmbeddingConfig(InputEmbeddingConfig):
+    encoder_cfg: VisionTransformerConfig = VisionTransformerConfig
+    img_start_token: int
+    encoder_no_grad: bool = False
+    """If true, freeze the vision encoder and skip its gradients."""
+
+    projector_bias: bool = False
+    """Whether the vision-language projector uses bias."""
+
+    def build_adapter(self) -> torch.nn.Module:
+        linear_layer = torch.nn.Linear(
+            self.encoder_cfg.output_dim,
+            self.hidden_size,
+            bias=self.projector_bias,
+        )
+        torch.nn.init.kaiming_normal_(linear_layer.weight, mode="fan_in", nonlinearity="relu")
+        if linear_layer.bias is not None:
+            torch.nn.init.zeros_(linear_layer.bias)
+        return linear_layer
+
+    def build_model(self):
+        return ImageInsertEmbedding(cfg=self)
+
+
+class ImageInsertEmbedding(WordEmbedding):
+    def __init__(self, cfg: ImageInsertInputEmbeddingConfig):
+        super().__init__(cfg)
+        self.cfg = cfg
+        self.align_projector = cfg.build_adapter().to(self.word_embeddings.weight.device)
+
+    @staticmethod
+    def _normalize_feature_list(
+        image_features: torch.Tensor | list[torch.Tensor],
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> list[torch.Tensor]:
+        if isinstance(image_features, torch.Tensor):
+            if image_features.dim() != 3:
+                raise ValueError(f"Expected image_features with shape [N, L, C], got {tuple(image_features.shape)}")
+            features = list(image_features.unbind(0))
+        else:
+            features = []
+            for feature in image_features:
+                if feature.dim() == 3:
+                    features.extend(list(feature.unbind(0)))
+                elif feature.dim() == 2:
+                    features.append(feature)
+                else:
+                    raise ValueError(f"Expected feature tensor rank 2 or 3, got rank {feature.dim()}")
+        return [feature.to(device=device, dtype=dtype) for feature in features]
+
+    @staticmethod
+    def insert_features(
+        input_embeddings: torch.Tensor,
+        image_features: torch.Tensor | list[torch.Tensor],
+        input_ids: torch.Tensor,
+        flag: int,
+    ) -> torch.Tensor:
+        feature_list = ImageInsertEmbedding._normalize_feature_list(
+            image_features,
+            device=input_embeddings.device,
+            dtype=input_embeddings.dtype,
+        )
+        if not feature_list:
+            return input_embeddings
+
+        insert_locations = torch.nonzero(input_ids == flag, as_tuple=False)
+        if insert_locations.numel() == 0:
+            return input_embeddings
+        insert_locations = insert_locations.clone()
+        insert_locations[:, 1] += 1
+
+        if len(feature_list) != insert_locations.shape[0]:
+            logger.warning(
+                "Mismatch between image features and insert locations: "
+                f"{len(feature_list)} features vs {insert_locations.shape[0]} locations; truncating to the overlap."
+            )
+        count = min(len(feature_list), insert_locations.shape[0])
+        if count == 0:
+            return input_embeddings
+
+        output = input_embeddings.clone()
+        for location, feature in zip(insert_locations[:count], feature_list[:count], strict=False):
+            batch_idx = int(location[0].item())
+            start = int(location[1].item())
+            end = min(start + feature.shape[0], output.shape[0])
+            if end <= start:
+                continue
+            output[start:end, batch_idx] = feature[: end - start]
+        return output
+
+    def forward(self, input_ids: torch.IntTensor, images: list[ImageForInsert] | None = None, **kwargs):
+        input_embeddings = super().forward(input_ids, **kwargs)
+        if not images:
+            return input_embeddings
+
+        target_dtype = self.align_projector.weight.dtype
+        target_device = self.align_projector.weight.device
+        for insert_image in images:
+            if insert_image.image_features is not None:
+                image_features = insert_image.image_features
+            else:
+                raise ValueError("ImageInsertEmbedding expects precomputed image_features in decoupled-encoder mode")
+
+            if isinstance(image_features, torch.Tensor):
+                image_features = image_features.to(device=target_device, dtype=target_dtype)
+                image_features = self.align_projector(image_features)
+            else:
+                image_features = [
+                    self.align_projector(feature.to(device=target_device, dtype=target_dtype))
+                    for feature in image_features
+                ]
+
+            input_embeddings = self.insert_features(
+                input_embeddings=input_embeddings,
+                image_features=image_features,
+                input_ids=input_ids,
+                flag=insert_image.insert_start_token,
+            )
+        return input_embeddings
 
 
 class OutputEmbedding(torch.nn.Module):

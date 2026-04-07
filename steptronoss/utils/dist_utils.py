@@ -184,8 +184,7 @@ def all_to_all_tensors(tensors: list[torch.Tensor], group, dtype, device, async_
 
 
 def all_to_all_objects(objects: list, group=None):
-
-    device = "cuda"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     group_size = torch.distributed.get_world_size(group)
     group_rank = torch.distributed.get_rank(group)
     assert len(objects) == group_size
