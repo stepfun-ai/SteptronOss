@@ -86,9 +86,10 @@ class DPMux(SlowFastNextable):
 
     def __next__(self):
         for i in range(self.dp_size):
-            example = next(self.nextable)
             if i == self.dp_rank:
-                my_batch = example
+                my_batch = next(self.nextable)
+            else:
+                self.nextable.fast_step()
         return my_batch
 
     def __len__(self):
