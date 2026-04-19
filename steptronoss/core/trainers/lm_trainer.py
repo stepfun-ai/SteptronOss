@@ -235,8 +235,10 @@ class DecoderPretrainTrainer(BaseTrainer):
         CMT.mark("after_optimizer_step")
         MoEBlock.update_router_balance_bias_per_gbs(self.models)
 
-        GlobalMetrics.grad_norm.add(grad_norm)
-        GlobalMetrics.grad_zeros.add(num_zeros_in_grad)
+        if grad_norm is not None:
+            GlobalMetrics.grad_norm.add(grad_norm)
+        if num_zeros_in_grad is not None:
+            GlobalMetrics.grad_zeros.add(num_zeros_in_grad)
 
         # Update learning rate.
         if update_successful:

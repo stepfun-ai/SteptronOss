@@ -11,6 +11,11 @@ from steptronoss.core.parallel_state import PM
 from steptronoss.model.common.rms_norm import RMSNorm
 from steptronoss.model.common.rope import YARNRoPE, ropen_linspace
 from steptronoss.model.decoder_model import LlamaLikeModel, NoopTransformerBlock, TransformerBlock
+from steptronoss.model.utils.glm5_utils import (
+    generate_varlen_mask_params,
+    lighting_indexer,
+    sparse_mla,
+)
 
 
 class Glm5YARNRoPE(YARNRoPE):
@@ -64,12 +69,28 @@ class Glm5YARNRoPE(YARNRoPE):
         return feature * cos + self.rotate_half(feature) * sin
 
 
-class Glm5Indexer(torch.nn.Module):
-    """Training-time DSA indexer used by GLM-5 attention.
+def _build_query_window_limits(
+    batch_size: int,
+    seq_len: int,
+    cu_seqlens: torch.IntTensor | None,
+    device: torch.device,
+) -> tuple[torch.IntTensor, torch.IntTensor]:
+    if cu_seqlens is None:
+        starts = torch.zeros((batch_size, seq_len), device=device, dtype=torch.int32)
+        ends = torch.arange(1, seq_len + 1, device=device, dtype=torch.int32).unsqueeze(0).expand(batch_size, -1)
+        return starts, ends
 
-    This first pass keeps the indexer duplicated across TP ranks so the rest of
-    the MLA path can continue using existing TP linears without extra gathers.
-    """
+    if batch_size != 1:
+        raise NotImplementedError("Packed GLM-5 attention currently expects batch_size == 1")
+
+    starts, ends = generate_varlen_mask_params(cu_seqlens.to(device=device, dtype=torch.int32))
+    starts = starts.unsqueeze(0)
+    ends = ends.unsqueeze(0)
+    return starts, ends
+
+
+class Glm5Indexer(torch.nn.Module):
+    """PyTorch reference of the slime GLM-5 DSA indexer."""
 
     def __init__(self, cfg, layer_id=None):
         super().__init__()
@@ -80,7 +101,7 @@ class Glm5Indexer(torch.nn.Module):
         self.index_head_dim = cfg.index_head_dim
         self.q_lora_rank = cfg.q_lora_rank
         self.qk_rope_head_dim = cfg.qk_rope_head_dim
-        self.softmax_scale = self.index_head_dim**-0.5
+        self.query_chunk_size = cfg.dsa_indexer_query_chunk_size
 
         self.wq_b = torch.nn.Linear(
             self.q_lora_rank,
@@ -118,40 +139,70 @@ class Glm5Indexer(torch.nn.Module):
         self,
         hidden_states: torch.Tensor,
         q_resid: torch.Tensor,
-        attention_mask: torch.Tensor | None,
+        cu_seqlens: torch.IntTensor | None,
         position_id: torch.IntTensor | None,
-    ) -> torch.LongTensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, _ = hidden_states.shape
 
-        q = self.wq_b(q_resid)
-        q = q.view(batch_size, seq_len, self.index_n_heads, self.index_head_dim)
-        q_pe, q_nope = torch.split(q, [self.qk_rope_head_dim, self.index_head_dim - self.qk_rope_head_dim], dim=-1)
+        q = self.wq_b(q_resid).view(batch_size, seq_len, self.index_n_heads, self.index_head_dim)
+        q_nope, q_pe = torch.split(q, [self.index_head_dim - self.qk_rope_head_dim, self.qk_rope_head_dim], dim=-1)
         q_pe = self.rope(q_pe, position_id=position_id)
-        q = torch.cat([q_pe, q_nope], dim=-1)
+        q = torch.cat([q_nope, q_pe], dim=-1)
 
-        k = self.k_norm(self.wk(hidden_states))
-        k_pe, k_nope = torch.split(k, [self.qk_rope_head_dim, self.index_head_dim - self.qk_rope_head_dim], dim=-1)
+        wk_out = self.wk(hidden_states)
+        k = F.layer_norm(
+            wk_out.float(),
+            normalized_shape=(wk_out.shape[-1],),
+            weight=self.k_norm.weight.float(),
+            bias=self.k_norm.bias.float() if self.k_norm.bias is not None else None,
+            eps=self.k_norm.eps,
+        ).to(hidden_states.dtype)
+        k_nope, k_pe = torch.split(k, [self.index_head_dim - self.qk_rope_head_dim, self.qk_rope_head_dim], dim=-1)
         k_pe = self.rope(k_pe.unsqueeze(2), position_id=position_id).squeeze(2)
-        k = torch.cat([k_pe, k_nope], dim=-1)
+        k = torch.cat([k_nope, k_pe], dim=-1)
 
-        weights = self.weights_proj(hidden_states).float() * (self.index_n_heads**-0.5)
-        scores = torch.einsum("bshd,btd->bsht", q.float(), k.float()) * self.softmax_scale
-        index_scores = torch.einsum("bsht,bsh->bst", scores, weights)
-        if attention_mask is not None:
-            index_scores = index_scores + attention_mask
+        weights = self.weights_proj(hidden_states).float() * ((self.index_n_heads**-0.5) * (self.index_head_dim**-0.5))
+        starts, ends = _build_query_window_limits(
+            batch_size=batch_size,
+            seq_len=seq_len,
+            cu_seqlens=cu_seqlens,
+            device=hidden_states.device,
+        )
+        topk = min(self.cfg.index_topk, seq_len)
+        topk_scores = []
+        topk_indices = []
 
-        topk = min(self.cfg.index_topk, index_scores.shape[-1])
-        return index_scores.topk(topk, dim=-1).indices
+        for batch_idx in range(batch_size):
+            batch_scores = []
+            batch_indices = []
+            index_q = q[batch_idx]
+            index_k = k[batch_idx]
+            head_weights = weights[batch_idx].unsqueeze(-1)
+            starts_b = starts[batch_idx]
+            ends_b = ends[batch_idx]
+
+            for chunk_start in range(0, seq_len, self.query_chunk_size):
+                chunk_end = min(chunk_start + self.query_chunk_size, seq_len)
+                chunk_scores, chunk_indices = lighting_indexer(
+                    index_q=index_q[chunk_start:chunk_end],
+                    index_k=index_k,
+                    weights=head_weights[chunk_start:chunk_end],
+                    cu_seqlen_ks=starts_b[chunk_start:chunk_end],
+                    cu_seqlen_ke=ends_b[chunk_start:chunk_end],
+                    topk=topk,
+                    topk_indices=None,
+                )
+                batch_scores.append(chunk_scores)
+                batch_indices.append(chunk_indices)
+
+            topk_scores.append(torch.cat(batch_scores, dim=0))
+            topk_indices.append(torch.cat(batch_indices, dim=0))
+
+        return torch.stack(topk_scores, dim=0), torch.stack(topk_indices, dim=0)
 
 
 class Glm5Attention(torch.nn.Module):
-    """GLM-5 MLA attention with a simple training-side DSA path.
-
-    The model family uses Dynamic Sparse Attention at long context. To minimize
-    the amount of new infrastructure for the initial SFT integration, this
-    implementation keeps the official top-k indexer but applies the sparse mask
-    through SDPA instead of a dedicated sparse kernel.
-    """
+    """GLM-5 MLA attention following slime's absorbed DSA tensor flow."""
 
     def __init__(self, cfg, layer_id=None):
         super().__init__()
@@ -172,10 +223,8 @@ class Glm5Attention(torch.nn.Module):
         self.qk_nope_head_dim = cfg.qk_nope_head_dim
         self.qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim
         self.v_head_dim = cfg.v_head_dim
-        if self.qk_head_dim != self.v_head_dim:
-            raise NotImplementedError(
-                "Initial GLM-5 SFT support expects qk_head_dim == v_head_dim so it can reuse SDPA directly."
-            )
+        self.softmax_scale = self.qk_head_dim**-0.5
+        self.sparse_query_chunk_size = cfg.dsa_attention_query_chunk_size
 
         self.q_a_proj = torch.nn.Linear(
             cfg.hidden_size,
@@ -241,49 +290,6 @@ class Glm5Attention(torch.nn.Module):
         self.indexer = Glm5Indexer(cfg=cfg, layer_id=layer_id)
 
     @staticmethod
-    def _build_final_attention_mask(
-        batch_size: int,
-        seq_len: int,
-        cu_seqlens: torch.IntTensor | None,
-        device: torch.device,
-    ) -> torch.Tensor | None:
-        if cu_seqlens is None:
-            neg_inf = float("-inf")
-            causal = torch.triu(
-                torch.full((seq_len, seq_len), neg_inf, device=device, dtype=torch.float32),
-                diagonal=1,
-            )
-            return causal.unsqueeze(0).expand(batch_size, -1, -1)
-
-        if batch_size != 1:
-            raise NotImplementedError("Packed GLM-5 attention currently expects batch_size == 1")
-
-        neg_inf = float("-inf")
-        mask = torch.full((1, seq_len, seq_len), neg_inf, device=device, dtype=torch.float32)
-        for start, end in zip(cu_seqlens[:-1].tolist(), cu_seqlens[1:].tolist()):
-            length = end - start
-            local = torch.triu(
-                torch.full((length, length), neg_inf, device=device, dtype=torch.float32),
-                diagonal=1,
-            )
-            mask[:, start:end, start:end] = local
-        return mask
-
-    @staticmethod
-    def _build_indexer_mask(
-        batch_size: int,
-        seq_len: int,
-        cu_seqlens: torch.IntTensor | None,
-        device: torch.device,
-    ) -> torch.Tensor | None:
-        return Glm5Attention._build_final_attention_mask(
-            batch_size=batch_size,
-            seq_len=seq_len,
-            cu_seqlens=cu_seqlens,
-            device=device,
-        )
-
-    @staticmethod
     def _default_position_id(seq_len: int, device: torch.device) -> torch.IntTensor:
         return torch.arange(seq_len, device=device, dtype=torch.int32)
 
@@ -309,62 +315,81 @@ class Glm5Attention(torch.nn.Module):
         query_states = query_states.view(batch_size, seq_len, self.num_local_heads, self.qk_head_dim)
         q_nope, q_pe = torch.split(query_states, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
         q_pe = self.rope(q_pe, position_id=position_id)
-        query_states = torch.cat([q_nope, q_pe], dim=-1)
 
         compressed_kv = self.kv_a_proj_with_mqa(x_bs)
         k_compressed, k_pe = torch.split(compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         k_compressed = self.kv_a_layernorm(k_compressed)
-        kv_expanded, _ = self.kv_b_proj(k_compressed)
-        kv_expanded = kv_expanded.view(
-            batch_size,
-            seq_len,
+        # Follow slime's absorbed MLA path: project Q into the KV latent space,
+        # run sparse attention over [latent_k, rope_k], then map latent V back.
+        kv_up_weight = self.kv_b_proj.weight.reshape(
             self.num_local_heads,
             self.qk_nope_head_dim + self.v_head_dim,
+            self.kv_lora_rank,
         )
-        k_nope, value_states = torch.split(kv_expanded, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
-        k_pe = self.rope(k_pe.unsqueeze(2), position_id=position_id).expand(-1, -1, self.num_local_heads, -1)
-        key_states = torch.cat([k_nope, k_pe], dim=-1)
+        w_kc, w_vc = torch.split(kv_up_weight, [self.qk_nope_head_dim, self.v_head_dim], dim=1)
+        q_absorbed = torch.einsum("bshd,hdm->bshm", q_nope, w_kc.to(q_nope.dtype))
+        query_states = torch.cat([q_absorbed, q_pe], dim=-1)
 
-        final_mask = self._build_final_attention_mask(
-            batch_size=batch_size,
-            seq_len=seq_len,
+        k_pe = self.rope(k_pe.unsqueeze(2), position_id=position_id)
+        value_states = k_compressed.unsqueeze(2)
+
+        _, topk_indices = self.indexer(
+            hidden_states=x_bs.detach(),
+            q_resid=q_resid.detach(),
             cu_seqlens=cu_seqlens,
-            device=x.device,
-        )
-        indexer_mask = self._build_indexer_mask(
-            batch_size=batch_size,
-            seq_len=seq_len,
-            cu_seqlens=cu_seqlens,
-            device=x.device,
-        )
-        topk_indices = self.indexer(
-            hidden_states=x_bs,
-            q_resid=q_resid,
-            attention_mask=indexer_mask,
             position_id=position_id,
         )
-
-        attn_mask = torch.full(
-            (batch_size, seq_len, key_states.shape[1]),
-            float("-inf"),
-            device=x.device,
-            dtype=query_states.dtype,
-        )
-        attn_mask.scatter_(-1, topk_indices, 0.0)
-        if final_mask is not None:
-            attn_mask = attn_mask + final_mask.to(attn_mask.dtype)
-        attn_mask = attn_mask.unsqueeze(1)
-        attn_output = F.scaled_dot_product_attention(
-            query_states.transpose(1, 2),
-            key_states.transpose(1, 2),
-            value_states.transpose(1, 2),
-            attn_mask=attn_mask,
-            dropout_p=self.attention_dropout if self.training else 0.0,
-            is_causal=False,
-        )
-        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
+        attn_latent = []
+        kv_states = torch.cat([value_states, k_pe], dim=-1)
+        for batch_idx in range(batch_size):
+            batch_out, _ = sparse_mla(
+                q=query_states[batch_idx],
+                kv=kv_states[batch_idx],
+                indices=topk_indices[batch_idx].unsqueeze(1),
+                scaling=self.softmax_scale,
+                d_v=self.kv_lora_rank,
+                query_chunk_size=self.sparse_query_chunk_size,
+            )
+            attn_latent.append(batch_out)
+        attn_latent = torch.stack(attn_latent, dim=0)
+        attn_output = torch.einsum("bshm,hdm->bshd", attn_latent, w_vc.to(attn_latent.dtype))
+        attn_output = attn_output.contiguous().view(batch_size, seq_len, -1)
         attn_output, _ = self.o_proj(attn_output)
         return attn_output.transpose(0, 1).contiguous()
+
+
+def _build_glm5_moe_expert_scripts(prefix_src: str, prefix_dst: str):
+    from steptronoss.checkpointing.reshape_ops import (
+        FFNMergeGateUp,
+        Inverse,
+        KeepThisEP,
+        KeepThisTP,
+        Rename,
+        RowParallel,
+        Script,
+        UnbindMoE,
+    )
+
+    return [
+        Script(
+            src=f"{prefix_src}.mlp.experts.*.[gu]*_proj.weight",
+            op=Inverse(UnbindMoE(moe_key_prefix="experts."))
+            + KeepThisEP()
+            + FFNMergeGateUp(group="ETP")
+            + KeepThisTP(group="ETP")
+            + Rename(f"{prefix_dst}.feed_forward.moe.experts.w1: {prefix_src}.mlp.experts.gate_up_proj.weight"),
+            dst=f"{prefix_dst}.feed_forward.moe.experts.w1",
+        ),
+        Script(
+            src=f"{prefix_src}.mlp.experts.*.down_proj.weight",
+            op=Inverse(UnbindMoE(moe_key_prefix="experts."))
+            + KeepThisEP()
+            + RowParallel(group="ETP")
+            + KeepThisTP(group="ETP")
+            + Rename(f"{prefix_dst}.feed_forward.moe.experts.w2: {prefix_src}.mlp.experts.down_proj.weight"),
+            dst=f"{prefix_dst}.feed_forward.moe.experts.w2",
+        ),
+    ]
 
 
 class Glm5Model(LlamaLikeModel):
@@ -557,18 +582,6 @@ class Glm5Model(LlamaLikeModel):
                         dst=f"{prefix_dst}.feed_forward.moe.router_balance_bias",
                     ),
                     Script(
-                        src=f"{prefix_src}.mlp.experts.gate_up_proj",
-                        op=KeepThisEP()
-                        + Rename(f"{prefix_dst}.feed_forward.moe.experts.w1: {prefix_src}.mlp.experts.gate_up_proj"),
-                        dst=f"{prefix_dst}.feed_forward.moe.experts.w1",
-                    ),
-                    Script(
-                        src=f"{prefix_src}.mlp.experts.down_proj",
-                        op=KeepThisEP()
-                        + Rename(f"{prefix_dst}.feed_forward.moe.experts.w2: {prefix_src}.mlp.experts.down_proj"),
-                        dst=f"{prefix_dst}.feed_forward.moe.experts.w2",
-                    ),
-                    Script(
                         src=f"{prefix_src}.mlp.shared_experts.[gu]*_proj.weight",
                         op=FFNMergeGateUp()
                         + KeepThisTP()
@@ -587,6 +600,7 @@ class Glm5Model(LlamaLikeModel):
                         dst=f"{prefix_dst}.feed_forward.share_expert.w2.weight",
                     ),
                 ])
+                block_scripts.extend(_build_glm5_moe_expert_scripts(prefix_src=prefix_src, prefix_dst=prefix_dst))
             else:
                 block_scripts.extend([
                     Script(

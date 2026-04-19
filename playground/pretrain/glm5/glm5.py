@@ -24,6 +24,8 @@ class Glm5AttentionConfig(AttentionConfig):
     index_n_heads: int
     index_topk: int
     index_layernorm_epsilon: float
+    dsa_indexer_query_chunk_size: int
+    dsa_attention_query_chunk_size: int
 
     def __init__(self):
         super().__init__()
@@ -63,6 +65,8 @@ class Glm5AttentionConfig(AttentionConfig):
         self.index_n_heads = 32
         self.index_topk = 2048
         self.index_layernorm_epsilon = 1e-6
+        self.dsa_indexer_query_chunk_size = 32
+        self.dsa_attention_query_chunk_size = 32
 
     def build_model(self, layer_id: int):
         from steptronoss.model.glm5 import Glm5Attention
@@ -161,11 +165,11 @@ class GLM5Config(DecoderLLMConfig):
     - 256 routed experts with 1 shared expert
     """
 
-    ffn_cfg = Glm5MoEFeedForwardConfig
-    attn_cfg = Glm5AttentionConfig
-    tok_embed_cfg = Glm5InputEmbeddingConfig
-    out_embed_cfg = Glm5OutputEmbeddingConfig
-    parallel_cfg = Glm5ParallelConfig
+    ffn_cfg: Glm5MoEFeedForwardConfig = Glm5MoEFeedForwardConfig
+    attn_cfg: Glm5AttentionConfig = Glm5AttentionConfig
+    tok_embed_cfg: Glm5InputEmbeddingConfig = Glm5InputEmbeddingConfig
+    out_embed_cfg: Glm5OutputEmbeddingConfig = Glm5OutputEmbeddingConfig
+    parallel_cfg: Glm5ParallelConfig = Glm5ParallelConfig
 
     def __init__(self):
         super().__init__()
