@@ -41,7 +41,7 @@ class PrefetchMuxInputMultiProcessQueue:
             self.input_queues = [mp.Queue(single_queue_size) for _ in range(mux_size)]
         self.mux_size = len(self.input_queues)
         self.prefetch_output_queue: queue.Queue = queue.Queue(PREFETCH_QUEUE_SIZE)
-        self.pin_emory = pin_memory
+        self.pin_memory = pin_memory
         self.idx = -1
         self.thread_stop_signal = False
         self._last_prefetch_empty_warn = 0.0
@@ -85,7 +85,7 @@ class PrefetchMuxInputMultiProcessQueue:
         try:
             while not self.thread_stop_signal:
                 data = self._get_one_data()
-                if self.pin_emory and not isinstance(data, Exception):
+                if self.pin_memory and not isinstance(data, Exception):
                     # Pin tensors to speed up host->device transfers.
                     data = pin_memory(data)
                 while not self.thread_stop_signal:
