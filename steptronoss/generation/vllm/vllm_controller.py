@@ -24,6 +24,11 @@ class VLLMController:
         self.endpoint: str | None = None
         self.router_url: str = None
         self._shutdown_called = False
+        self.node_rank = 0
+        self.master_addr: str | None = None
+        self.master_port: int | None = None
+        self.my_ip: str | None = None
+        self.runtime_env: dict[str, str] = {}
 
         # get total replica, so we know how many replica we are expecting
         self.nnodes = int(os.environ["NNODES"])
@@ -31,23 +36,99 @@ class VLLMController:
     def start(self):
         signal.signal(signal.SIGTERM, self._handle_sigterm)
         atexit.register(self.shutdown)
+        if self.is_multi_node_serving:
+            self.runtime_env = self._prepare_multinode_runtime()
+
         self.run_vllm()
-        self.wait_for_health()
-        self.register()
+        if not self.is_headless_worker:
+            self.wait_for_health()
+            self.register()
         self.process.wait()
+
+    @property
+    def is_multi_node_serving(self) -> bool:
+        return self.cfg.multi_node_serving and self.nnodes > 1
+
+    @property
+    def is_headless_worker(self) -> bool:
+        return self.is_multi_node_serving and self.node_rank > 0
+
+    def _prepare_multinode_runtime(self) -> dict[str, str]:
+        exp_redis = get_exp_redis()
+        self.my_ip = socket.gethostbyname(socket.getfqdn(socket.gethostname()))
+        key_prefix = f"VLLM_MULTINODE_{self.cfg.model_name}"
+        members_key = f"{key_prefix}_MEMBERS"
+        master_key = f"{key_prefix}_MASTER"
+
+        exp_redis.sadd(members_key, self.my_ip)
+
+        start_time = time.time()
+        while exp_redis.scard(members_key) < self.nnodes:
+            if time.time() - start_time > 1800:
+                raise TimeoutError(f"Timeout waiting for {self.nnodes} multi-node vLLM workers to join {members_key}")
+            time.sleep(1)
+
+        members = sorted(member.decode() for member in exp_redis.smembers(members_key))
+        if self.my_ip not in members:
+            raise RuntimeError(f"Current worker IP {self.my_ip} missing from {members_key}: {members}")
+
+        self.node_rank = members.index(self.my_ip)
+        if self.node_rank == 0:
+            self.master_addr = self.my_ip
+            self.master_port = get_free_port()
+            exp_redis.set(master_key, f"{self.master_addr}:{self.master_port}")
+        else:
+            master = block_get_redis(exp_redis, master_key).decode()
+            self.master_addr, master_port = master.rsplit(":", 1)
+            self.master_port = int(master_port)
+
+        if self.master_addr is None or self.master_port is None:
+            raise RuntimeError("Failed to resolve multi-node vLLM master address.")
+
+        runtime_env = {
+            "VLLM_NNODES": str(self.nnodes),
+            "VLLM_NODE_RANK": str(self.node_rank),
+            "VLLM_MASTER_ADDR": self.master_addr,
+            "VLLM_MASTER_PORT": str(self.master_port),
+            "VLLM_HEADLESS": "1" if self.node_rank > 0 else "0",
+        }
+        return runtime_env
 
     def run_vllm(self):
         """run vllm in subprocess, just like run 'vllm serve xxx'"""
+        if self.is_multi_node_serving:
+            os.environ.update(self.runtime_env)
         cmd, env = self.cfg.get_entrypoint_command_and_envs()
 
         self.vllm_port = get_free_port()
         env["PORT_SERVING"] = str(self.vllm_port)
+        launch_env = os.environ | env | {"VLLM_SERVER_DEV_MODE": "1"}
+        if self.is_multi_node_serving:
+            # vLLM multi-node bootstrap should only use its own rendezvous
+            # arguments/envs. Inherited outer launcher rendezvous or NIC
+            # bindings can poison the mp backend.
+            for key in (
+                "MASTER_ADDR",
+                "MASTER_PORT",
+                "NODE_RANK",
+                "NODE_COUNT",
+                "PROC_PER_NODE",
+                "RANK",
+                "WORLD_SIZE",
+                "LOCAL_RANK",
+                "LOCAL_WORLD_SIZE",
+                "NCCL_SOCKET_IFNAME",
+                "NCCL_IB_HCA",
+                "NCCL_RAS_ADDR",
+                "GLOO_SOCKET_IFNAME",
+            ):
+                launch_env.pop(key, None)
 
         logger.info(f"Launching vLLM with command: {cmd}")
         self.process = subprocess.Popen(  # noqa: S602
             cmd,
             shell=True,
-            env=os.environ | env | {"VLLM_SERVER_DEV_MODE": "1"},  # must in DEV MODE
+            env=launch_env,  # must in DEV MODE
             stdout=sys.stdout,
             stderr=sys.stderr,
             stdin=sys.stdin,
@@ -88,7 +169,7 @@ class VLLMController:
         my_ip = socket.gethostbyname(socket.getfqdn(socket.gethostname()))
         self.endpoint = f"{my_ip}:{self.vllm_port}"
         model_name = self.cfg.model_name
-        exp_redis.set(f"VLLM_NUM_WORKERS_OF_{model_name}", self.nnodes)
+        exp_redis.set(f"VLLM_NUM_WORKERS_OF_{model_name}", 1 if self.cfg.multi_node_serving else self.nnodes)
         exp_redis.rpush(f"VLLM_WORKERS_OF_{model_name}", self.endpoint)
         try:
             response = requests.get(
@@ -105,6 +186,8 @@ class VLLMController:
 
     def deregister(self):
         # self._wait_for_active_requests()
+        if self.router_url is None or self.endpoint is None:
+            return
 
         try:
             response = requests.get(
