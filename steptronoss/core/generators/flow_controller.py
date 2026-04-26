@@ -159,16 +159,18 @@ class SimpleFlowController(FlowController):
 
         def flow_callback(genable: GenableItem, generated: dict):
             nonlocal active_counter
-            if isinstance(generated, Exception):
-                if not self.cfg.genable_allow_errors:
-                    raise generated
-                else:  # ignore this
-                    generated = []
+            try:
+                if isinstance(generated, Exception):
+                    if not self.cfg.genable_allow_errors:
+                        raise generated
+                    else:  # ignore this
+                        generated = []
 
-            with self.flow.lock:
-                self.flow["pre_train"].put(generated)
-                self.flow["pre_gen"].ack(genable.meta.pop("ack_pre_id"))
-            active_counter -= 1
+                with self.flow.lock:
+                    self.flow["pre_train"].put(generated)
+                    self.flow["pre_gen"].ack(genable.meta.pop("ack_pre_id"))
+            finally:
+                active_counter -= 1
 
         while 1:
             ack_id, data = self.flow["pre_gen"].get()
@@ -430,16 +432,22 @@ class FullyAsyncFlowController(FlowController):
 
     def _generation_worker(self):
         def flow_callback(genable: GenableItem, generated: dict):
-            if isinstance(generated, Exception):
-                if not self.cfg.genable_allow_errors:
-                    raise generated
-                generated = []
+            try:
+                if isinstance(generated, Exception):
+                    if not self.cfg.genable_allow_errors:
+                        raise generated
+                    generated = []
 
-            with self._cv:
-                self.flow["pre_train"].put(generated)
-                self.flow["pre_gen"].ack(genable.meta.pop("ack_pre_id"))
-                self.running_genables.pop(genable.meta.pop("running_ack_id"), None)
-                self._cv.notify_all()
+                with self._cv:
+                    self.flow["pre_train"].put(generated)
+                    self.flow["pre_gen"].ack(genable.meta.pop("ack_pre_id"))
+                    self.running_genables.pop(genable.meta.pop("running_ack_id"), None)
+                    self._cv.notify_all()
+            except Exception:
+                with self._cv:
+                    self.running_genables.pop(genable.meta.get("running_ack_id"), None)
+                    self._cv.notify_all()
+                raise
 
         while True:
             with self._cv:
