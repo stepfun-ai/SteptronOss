@@ -393,6 +393,11 @@ class MegatronPPModelConfig(AbstractModelConfig):
 
     fp32_residual_connection: bool = False
 
+    fp32_output: bool = True
+    """Upcast the model's final output to fp32 in Float16Module.forward.
+    Set False to keep logits in params_dtype (bf16/fp16); useful for bounding
+    transient memory on long-seq + large-vocab configs."""
+
     def get_pp_scheduler(self) -> FWBWScheduler:
         from steptronoss.core.parallel_state import PM, get_vpp_size
         from steptronoss.core.pipeline_parallel.schedules import (

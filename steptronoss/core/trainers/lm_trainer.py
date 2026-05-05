@@ -349,7 +349,8 @@ class DecoderPretrainTrainer(BaseTrainer):
 
         # Fp16 conversion.
         if model_config.params_dtype in [torch.float16, torch.bfloat16]:
-            model = [Float16Module(model_module, model_config.params_dtype) for model_module in model]
+            fp32_output = getattr(model_config, "fp32_output", True)
+            model = [Float16Module(model_module, model_config.params_dtype, fp32_output) for model_module in model]
 
         model = torch.nn.ModuleList(model)
 
