@@ -153,7 +153,6 @@ def test_qwen_vl_forward_runs_decoupled_vit_then_inserts_features_on_cpu(single_
 
     model = _CpuToyQwenVLModel(cfg)
     model.eval()
-    model.mesh_connector.broadcast = lambda data: data
     vision_mesh_seen = []
 
     raw_encoder_forward = model.encoder.forward

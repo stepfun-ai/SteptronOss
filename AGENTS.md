@@ -232,6 +232,7 @@ Improve pass:
   - `expert_tensor_parallel_size=1`
   - otherwise MoE MP size becomes 64 and the config is invalid
 - In mixed dense/MoE topologies, expert params are reduced over `EDP`, not dense `DP`; the current gradient manager compensates with `TP/EP` scaling on expert grad buffers before the `EDP` reduction, so check that path before blaming an apparent extra `EP` factor.
+- `MeshConnector` treats ranks that differ only in its configurable `dup_dim` as duplicate payload holders; Step3V passes `dup_dim=["TP"]`. Callers should keep all ranks on the same `forward()` / `backward()` sequence; empty batch shards skip the auxiliary encoder but still participate in connector return traffic.
 
 ### Checkpoint reshape
 

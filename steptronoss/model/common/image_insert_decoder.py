@@ -37,6 +37,7 @@ class ImageInsertDecoderMixin:
             src_mesh=self.cfg.parallel_cfg,
             dst_mesh=encoder_cfg.parallel_cfg,
             is_data_source=self.is_pipeline_first_stage(),
+            dup_dim=["TP"],
         )
 
     def _build_multimodal_reshape_scripts(self):
@@ -111,11 +112,14 @@ class ImageInsertDecoderMixin:
             local_images = self.mesh_connector.forward(insert_image.images)
             if local_images is None:
                 raise ValueError("MeshConnector returned no images for ImageForInsert")
-            with (
-                PM.use_mesh(self.cfg.tok_embed_cfg.encoder_cfg.parallel_cfg),
-                torch.set_grad_enabled(not self.cfg.tok_embed_cfg.encoder_no_grad),
-            ):
-                local_features = self.encoder(local_images.to(device=encoder_device, dtype=encoder_dtype))
+            if local_images.shape[0] == 0:
+                local_features = local_images.new_empty((0, 0, 0))
+            else:
+                with (
+                    PM.use_mesh(self.cfg.tok_embed_cfg.encoder_cfg.parallel_cfg),
+                    torch.set_grad_enabled(not self.cfg.tok_embed_cfg.encoder_no_grad),
+                ):
+                    local_features = self.encoder(local_images.to(device=encoder_device, dtype=encoder_dtype))
             image_features = self.mesh_connector.backward(local_features)
             processed.append(
                 ImageForInsert(
@@ -129,7 +133,7 @@ class ImageInsertDecoderMixin:
 
     def _prepare_inputs(self, kwargs):
         kwargs = dict(kwargs)
-        images = self.mesh_connector.broadcast(kwargs.get("images"))
+        images = kwargs.get("images")
         if not images:
             return kwargs
         kwargs["images"] = self._encode_images_for_insert(images)
