@@ -165,9 +165,7 @@ Improve pass:
   - `disable_qk_norm` ↔ `use_qk_norm` (inverted)
   - `use_swiglu_limit` ↔ `swiglu_limit`
 - For `ImageForInsert` multimodal embeddings with context parallel, do image insertion on the full embedding sequence first and only then call `scatter_to_balanced_cp_region(...)`; scattering `input_ids` before multimodal tok-embedding breaks insert-location alignment.
-- For `step3p5v`-style multimodal embeddings, run the vision encoder under `with PM.use_mesh(cfg.encoder_cfg.parallel_cfg): ...` so encoder-side TP/PP settings stay local and the outer language mesh is restored afterward.
 - `steptronoss/model/common/vit.py` is now a TP-sharded vision transformer: qkv / out projection and MLP use TP-partitioned linear layers, while patch embedding and downsamplers stay replicated.
-- In the current OSS `step3p5v` design, `ImageInsertInputEmbedding` is feature-only; raw `images` are encoded in `Step3p5vModel.forward()` via `MeshConnector(src_mesh, dst_mesh)` before the normal decoder forward runs.
 - If you change `num_layers`, keep all layer-wise lists in sync:
   - `qk_rope_head_dim`
   - `rope_theta`

@@ -21,6 +21,106 @@ def quick_gelu(x: torch.Tensor) -> torch.Tensor:
     return x * torch.sigmoid(1.702 * x)
 
 
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
+    """Rotate pairs in the last dimension for RoPE."""
+
+    x = x.reshape(*x.shape[:-1], -1, 2)
+    x1, x2 = x.unbind(dim=-1)
+    return torch.stack((-x2, x1), dim=-1).flatten(-2)
+
+
+def apply_rotary_emb(
+    freqs: torch.Tensor,
+    tensor: torch.Tensor,
+    *,
+    start_index: int = 0,
+    scale: float = 1.0,
+) -> torch.Tensor:
+    """Apply cached rotary frequencies to the last dimension of a q/k tensor."""
+
+    dtype = tensor.dtype
+    freqs = freqs.to(device=tensor.device, dtype=torch.float32)
+    rot_dim = freqs.shape[-1]
+    end_index = start_index + rot_dim
+    if rot_dim > tensor.shape[-1]:
+        raise ValueError(f"feature dimension {tensor.shape[-1]} is too small for rot_dim {rot_dim}")
+
+    tensor_left = tensor[..., :start_index]
+    tensor_rot = tensor[..., start_index:end_index].float()
+    tensor_right = tensor[..., end_index:]
+    tensor_rot = (tensor_rot * freqs.cos() * scale) + (rotate_half(tensor_rot) * freqs.sin() * scale)
+    return torch.cat((tensor_left, tensor_rot.to(dtype), tensor_right), dim=-1)
+
+
+class EncoderRope2D(nn.Module):
+    """Cacheable 2D rotary positional embedding for vision attention."""
+
+    def __init__(
+        self,
+        dim: int,
+        max_grid_height: int,
+        max_grid_width: int,
+        *,
+        use_cls_token: bool = False,
+        theta: int | float = 10000,
+        max_freq: int = 10,
+        num_freqs: int = 1,
+        theta_rescale_factor: float = 1.0,
+    ):
+        super().__init__()
+        self.dim = dim
+        self.max_grid_height = max_grid_height
+        self.max_grid_width = max_grid_width
+        self.use_cls_token = use_cls_token
+        self.theta = theta * theta_rescale_factor ** (dim / (dim - 2))
+        self.max_freq = max_freq
+        self.num_freqs = num_freqs
+        self.freqs_cache: torch.Tensor
+        self.register_buffer("freqs_cache", self._compute_2d_freqs(), persistent=False)
+
+    @staticmethod
+    def _compute_inv_freq(base: int | float, dim: int) -> torch.Tensor:
+        return 1.0 / (base ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+
+    @staticmethod
+    def _compute_freqs(position: torch.Tensor, inv_freq: torch.Tensor) -> torch.Tensor:
+        freqs = torch.einsum("..., f -> ... f", position.to(inv_freq.dtype), inv_freq)
+        return freqs.repeat_interleave(2, dim=-1)
+
+    def _compute_2d_freqs(self) -> torch.Tensor:
+        grid_h_range = torch.arange(self.max_grid_height, dtype=torch.float32)
+        grid_w_range = torch.arange(self.max_grid_width, dtype=torch.float32)
+        if self.use_cls_token:
+            grid_h_range += 1
+            grid_w_range += 1
+
+        inv_freq = self._compute_inv_freq(self.theta, self.dim // 2)
+        freqs_h = self._compute_freqs(grid_h_range, inv_freq)[:, None].expand(
+            self.max_grid_height, self.max_grid_width, -1
+        )
+        freqs_w = self._compute_freqs(grid_w_range, inv_freq)[None, :].expand(
+            self.max_grid_height, self.max_grid_width, -1
+        )
+        freqs = torch.cat([freqs_w, freqs_h], dim=-1).reshape(self.max_grid_height * self.max_grid_width, -1)
+        if self.use_cls_token:
+            freqs = torch.cat([torch.zeros(1, freqs.shape[-1]), freqs], dim=0)
+        return freqs[None, None, ...]
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, grid_hw: tuple[int, int]) -> tuple[torch.Tensor, torch.Tensor]:
+        freqs: torch.Tensor
+        if grid_hw == (self.max_grid_height, self.max_grid_width):
+            freqs = self.freqs_cache
+        else:
+            rows = torch.arange(grid_hw[0], device=q.device).view(-1, 1)
+            cols = torch.arange(grid_hw[1], device=q.device).view(1, -1)
+            positions = (rows * self.max_grid_width + cols).reshape(-1).to(torch.long)
+            if self.use_cls_token:
+                positions = torch.cat([torch.zeros(1, device=q.device, dtype=torch.long), positions + 1], dim=0)
+            freqs = self.freqs_cache.index_select(2, positions.to(self.freqs_cache.device))
+
+        return apply_rotary_emb(freqs, q), apply_rotary_emb(freqs, k)
+
+
 def _interpolate_positional_embedding(
     position_embedding: torch.Tensor, target_tokens: int, *, use_cls_token: bool
 ) -> torch.Tensor:
@@ -57,6 +157,7 @@ def _interpolate_positional_embedding(
     ).to(dtype)
     grid = grid.permute(0, 2, 3, 1).reshape(1, target_grid_tokens, -1)
     if use_cls_token:
+        assert cls_token is not None
         return torch.cat([cls_token, grid], dim=1)
     return grid
 
@@ -74,7 +175,7 @@ class VisionTransformerParallelConfig(ParallelConfig):
         self.expert_tensor_parallel_size = 1
 
 
-class VisionTransformerConfig(Config):
+class VisionTransformerConfig(Config):  # type: ignore[no-any-unimported]
     parallel_cfg = VisionTransformerParallelConfig
     """Parallel mesh used while building/running the vision encoder."""
 
@@ -110,6 +211,21 @@ class VisionTransformerConfig(Config):
 
     attention_dropout: float = 0.0
     """Attention dropout probability."""
+
+    use_rope2d: bool = False
+    """Whether to apply 2D RoPE in each vision self-attention layer."""
+
+    rope_theta: int | float = 10000
+    """Base theta for 2D RoPE."""
+
+    rope_max_freq: int = 10
+    """Maximum frequency parameter kept for HF Step3-VL config parity."""
+
+    rope_num_freqs: int = 1
+    """Number of frequency bands kept for HF Step3-VL config parity."""
+
+    rope_theta_rescale_factor: float = 1.0
+    """Theta rescale factor for 2D RoPE."""
 
     layer_scale_init_value: float | None = None
     """Optional residual layer-scale initialization."""
@@ -225,16 +341,32 @@ class VisionAttention(nn.Module):
         self.num_local_heads = cfg.num_attention_heads // tp_world_size
         self.head_dim = cfg.hidden_size // cfg.num_attention_heads
         self.attention_dropout = cfg.attention_dropout
+        self.rope = (
+            EncoderRope2D(
+                dim=self.head_dim,
+                max_grid_height=cfg.image_size // cfg.patch_size,
+                max_grid_width=cfg.image_size // cfg.patch_size,
+                use_cls_token=cfg.use_cls_token,
+                theta=cfg.rope_theta,
+                max_freq=cfg.rope_max_freq,
+                num_freqs=cfg.rope_num_freqs,
+                theta_rescale_factor=cfg.rope_theta_rescale_factor,
+            )
+            if cfg.use_rope2d
+            else None
+        )
 
         self.qkv_proj = TPColumnLinear(cfg.hidden_size, cfg.hidden_size * 3, bias=True)
         self.out_proj = TPRowLinear(cfg.hidden_size, cfg.hidden_size, bias=True, input_is_parallel=True)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, grid_hw: tuple[int, int]) -> torch.Tensor:
         batch_size, seq_len, hidden_size = x.shape
         qkv = self.qkv_proj(x).reshape(batch_size, seq_len, 3, self.num_local_heads, self.head_dim)
         q, k, v = qkv.unbind(dim=2)
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
+        if self.rope is not None:
+            q, k = self.rope(q, k, grid_hw=grid_hw)
         v = v.transpose(1, 2)
 
         attn_output = F.scaled_dot_product_attention(
@@ -267,8 +399,8 @@ class VisionBlock(nn.Module):
             else nn.Identity()
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.ls_1(self.attn(self.ln_1(x)))
+    def forward(self, x: torch.Tensor, grid_hw: tuple[int, int]) -> torch.Tensor:
+        x = x + self.ls_1(self.attn(self.ln_1(x), grid_hw=grid_hw))
         x = x + self.ls_2(self.mlp(self.ln_2(x)))
         return x
 
@@ -278,9 +410,9 @@ class VisionBackbone(nn.Module):
         super().__init__()
         self.resblocks = nn.ModuleList([VisionBlock(cfg) for _ in range(cfg.num_layers)])
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, grid_hw: tuple[int, int]) -> torch.Tensor:
         for block in self.resblocks:
-            x = block(x)
+            x = block(x, grid_hw=grid_hw)
         return x
 
 
@@ -341,7 +473,8 @@ class VisionTransformer(nn.Module):
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         x = self._build_embeddings(pixel_values)
-        x = self.transformer(x)
+        grid_hw = (pixel_values.shape[-2] // self.cfg.patch_size, pixel_values.shape[-1] // self.cfg.patch_size)
+        x = self.transformer(x, grid_hw=grid_hw)
         if self.cfg.use_cls_token:
             x = x[:, 1:, :]
 
