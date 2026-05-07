@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from functools import cached_property
 
@@ -8,6 +9,7 @@ import torch.nn.functional as F
 from configurize import Config, Ref
 from torch import nn
 
+from steptronoss.checkpointing.reshape_ops import ReshapeOp
 from steptronoss.core import tensor_parallel
 from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import MegatronTPConfig
@@ -20,6 +22,8 @@ from steptronoss.model.ep_dispatcher.token_dispatcher import TokenDispatcher
 from steptronoss.model.module import MegatronModule
 from steptronoss.utils.general import get_position_id_from_cu_seqlens, safediv
 from steptronoss.utils.utils import format_layermap
+
+_FP8_BLOCK_SIZE = (128, 128)
 
 
 def _sqrt_softplus(x: torch.Tensor) -> torch.Tensor:
@@ -34,6 +38,61 @@ def _get_score_fn(name: str) -> Callable[[torch.Tensor], torch.Tensor]:
     if name == "softmax":
         return lambda x: F.softmax(x, dim=-1)
     raise ValueError(f"Unsupported DeepSeek V4 router scoring_func={name!r}")
+
+
+def _dequant_fp8_blockwise(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    weight_f32 = weight.float()
+    expanded_scale = scale.repeat_interleave(_FP8_BLOCK_SIZE[0], dim=0).repeat_interleave(_FP8_BLOCK_SIZE[1], dim=1)
+    expanded_scale = expanded_scale[: weight_f32.shape[0], : weight_f32.shape[1]]
+    return (weight_f32 * expanded_scale).to(torch.bfloat16)
+
+
+class DeepseekV4FlashFP8Dequant(ReshapeOp):
+    """Decode DeepSeek V4 Flash block-FP8 `*.weight` tensors using sibling `*.scale` tensors."""
+
+    def forward(self, piece: dict) -> dict:
+        output = {}
+        for key, tensor in piece.items():
+            if key.endswith(".scale"):
+                continue
+            if tensor.dtype == torch.float8_e4m3fn:
+                scale_key = f"{key.removesuffix('.weight')}.scale"
+                if scale_key not in piece:
+                    raise KeyError(f"Missing FP8 scale tensor for {key}")
+                tensor = _dequant_fp8_blockwise(tensor, piece[scale_key])
+            output[key] = tensor
+        return output
+
+    def backward(self, piece: dict) -> dict:
+        raise NotImplementedError(f"{self} is safetensors->model only")
+
+
+class DeepseekV4FlashExperts(ReshapeOp):
+    def __init__(self, dst_key: str, gate_up: bool):
+        self.dst_key = dst_key
+        self.gate_up = gate_up
+
+    def forward(self, piece: dict) -> dict:
+        expert_ids = sorted({int(match.group(1)) for key in piece if (match := re.search(r"\.experts\.(\d+)\.", key))})
+        tensors = []
+        for expert_id in expert_ids:
+            prefix = self._expert_prefix(piece, expert_id)
+            if self.gate_up:
+                tensors.append(torch.cat([piece[f"{prefix}.w1.weight"], piece[f"{prefix}.w3.weight"]], dim=0))
+            else:
+                tensors.append(piece[f"{prefix}.w2.weight"])
+        return {self.dst_key: torch.stack(tensors, dim=0)}
+
+    @staticmethod
+    def _expert_prefix(piece: dict, expert_id: int) -> str:
+        suffix = f".experts.{expert_id}."
+        for key in piece:
+            if suffix in key and key.endswith(".weight"):
+                return key.split(suffix)[0] + suffix[:-1]
+        raise KeyError(f"Expert {expert_id} not found")
+
+    def backward(self, piece: dict) -> dict:
+        raise NotImplementedError(f"{self} is safetensors->model only")
 
 
 def _rotate_half_interleaved(x: torch.Tensor) -> torch.Tensor:
@@ -994,7 +1053,174 @@ class DeepseekV4Model(MegatronModule):
                 mapping[f"{prefix_local}.{suffix}"] = f"{prefix_hf}.{suffix}"
         return mapping
 
+    @cached_property
+    def reshaper(self):
+        return self.build_reshaper()
+
+    def build_reshaper(self):
+        from steptronoss.checkpointing.reshape_ops import (
+            ColumnParallel,
+            Duplicate,
+            KeepThisTP,
+            OnlineReshaper,
+            Rename,
+            RowParallel,
+            Script,
+            VocabPad,
+        )
+
+        def src_with_scale(weight_key: str) -> list[str]:
+            if weight_key.endswith(".weight"):
+                return [weight_key, f"{weight_key.removesuffix('.weight')}.scale"]
+            return [weight_key]
+
+        def replicated(weight_key: str, dst_key: str):
+            return Script(
+                src=src_with_scale(weight_key),
+                op=DeepseekV4FlashFP8Dequant() + Duplicate() + KeepThisTP() + Rename(f"{dst_key}: {weight_key}"),
+                dst=dst_key,
+            )
+
+        def column(weight_key: str, dst_key: str):
+            return Script(
+                src=src_with_scale(weight_key),
+                op=DeepseekV4FlashFP8Dequant() + ColumnParallel() + KeepThisTP() + Rename(f"{dst_key}: {weight_key}"),
+                dst=dst_key,
+            )
+
+        def row(weight_key: str, dst_key: str):
+            return Script(
+                src=src_with_scale(weight_key),
+                op=DeepseekV4FlashFP8Dequant() + RowParallel() + KeepThisTP() + Rename(f"{dst_key}: {weight_key}"),
+                dst=dst_key,
+            )
+
+        scripts = []
+        if self.is_pipeline_first_stage():
+            scripts.append(
+                Script(
+                    src="embed.weight",
+                    op=VocabPad(target_vocab_size=self.cfg.tok_embed_cfg.vocab_size, dim=0, pad_type="last")
+                    + ColumnParallel()
+                    + KeepThisTP()
+                    + Rename("tok_embeddings.word_embeddings.weight: embed.weight"),
+                    dst="tok_embeddings.word_embeddings.weight",
+                )
+            )
+        if self.is_pipeline_last_stage():
+            scripts.extend([
+                Script(
+                    src="head.weight",
+                    op=VocabPad(target_vocab_size=self.cfg.out_embed_cfg.vocab_size, dim=0, pad_type="last")
+                    + ColumnParallel()
+                    + KeepThisTP()
+                    + Rename("out_embeddings.output.weight: head.weight"),
+                    dst="out_embeddings.output.weight",
+                ),
+                replicated("norm.weight", "out_embeddings.norm.weight"),
+                replicated("hc_head_fn", "hc_head.hc_fn"),
+                replicated("hc_head_base", "hc_head.hc_base"),
+                replicated("hc_head_scale", "hc_head.hc_scale"),
+            ])
+
+        for local_id, layer in enumerate(self.layers):
+            if isinstance(layer, NoopTransformerBlock):
+                continue
+            local = f"layers.{local_id}"
+            release = f"layers.{layer.layer_id}"
+            attn = f"{local}.self_attn"
+            rel_attn = f"{release}.attn"
+            mlp = f"{local}.mlp"
+            rel_ffn = f"{release}.ffn"
+
+            scripts.extend([
+                replicated(f"{release}.attn_norm.weight", f"{local}.input_layernorm.weight"),
+                replicated(f"{release}.ffn_norm.weight", f"{local}.post_attention_layernorm.weight"),
+                replicated(f"{release}.hc_attn_fn", f"{local}.attn_hc.fn"),
+                replicated(f"{release}.hc_attn_base", f"{local}.attn_hc.base"),
+                replicated(f"{release}.hc_attn_scale", f"{local}.attn_hc.scale"),
+                replicated(f"{release}.hc_ffn_fn", f"{local}.ffn_hc.fn"),
+                replicated(f"{release}.hc_ffn_base", f"{local}.ffn_hc.base"),
+                replicated(f"{release}.hc_ffn_scale", f"{local}.ffn_hc.scale"),
+                column(f"{rel_attn}.attn_sink", f"{attn}.sinks"),
+                replicated(f"{rel_attn}.wq_a.weight", f"{attn}.q_a_proj.weight"),
+                replicated(f"{rel_attn}.q_norm.weight", f"{attn}.q_a_norm.weight"),
+                column(f"{rel_attn}.wq_b.weight", f"{attn}.q_b_proj.weight"),
+                replicated(f"{rel_attn}.wkv.weight", f"{attn}.kv_proj.weight"),
+                replicated(f"{rel_attn}.kv_norm.weight", f"{attn}.kv_norm.weight"),
+                column(f"{rel_attn}.wo_a.weight", f"{attn}.o_a_proj.weight"),
+                row(f"{rel_attn}.wo_b.weight", f"{attn}.o_b_proj.weight"),
+            ])
+
+            if layer.self_attn.compressor is not None:
+                scripts.extend([
+                    replicated(f"{rel_attn}.compressor.wkv.weight", f"{attn}.compressor.kv_proj.weight"),
+                    replicated(f"{rel_attn}.compressor.wgate.weight", f"{attn}.compressor.gate_proj.weight"),
+                    replicated(f"{rel_attn}.compressor.ape", f"{attn}.compressor.position_bias"),
+                    replicated(f"{rel_attn}.compressor.norm.weight", f"{attn}.compressor.kv_norm.weight"),
+                ])
+            if hasattr(layer.self_attn.compressor, "indexer"):
+                scripts.extend([
+                    replicated(
+                        f"{rel_attn}.indexer.compressor.wkv.weight",
+                        f"{attn}.compressor.indexer.kv_proj.weight",
+                    ),
+                    replicated(
+                        f"{rel_attn}.indexer.compressor.wgate.weight",
+                        f"{attn}.compressor.indexer.gate_proj.weight",
+                    ),
+                    replicated(f"{rel_attn}.indexer.compressor.ape", f"{attn}.compressor.indexer.position_bias"),
+                    replicated(
+                        f"{rel_attn}.indexer.compressor.norm.weight",
+                        f"{attn}.compressor.indexer.kv_norm.weight",
+                    ),
+                    replicated(f"{rel_attn}.indexer.wq_b.weight", f"{attn}.compressor.indexer.q_b_proj.weight"),
+                    replicated(
+                        f"{rel_attn}.indexer.weights_proj.weight",
+                        f"{attn}.compressor.indexer.weights_proj.weight",
+                    ),
+                ])
+
+            scripts.append(replicated(f"{rel_ffn}.gate.weight", f"{mlp}.gate.weight"))
+            if hasattr(layer.mlp.gate, "tid2eid"):
+                scripts.append(replicated(f"{rel_ffn}.gate.tid2eid", f"{mlp}.gate.tid2eid"))
+            if hasattr(layer.mlp.gate, "e_score_correction_bias"):
+                scripts.append(replicated(f"{rel_ffn}.gate.bias", f"{mlp}.gate.e_score_correction_bias"))
+            scripts.extend([
+                replicated(f"{rel_ffn}.shared_experts.w1.weight", f"{mlp}.shared_experts.gate_proj.weight"),
+                replicated(f"{rel_ffn}.shared_experts.w3.weight", f"{mlp}.shared_experts.up_proj.weight"),
+                replicated(f"{rel_ffn}.shared_experts.w2.weight", f"{mlp}.shared_experts.down_proj.weight"),
+            ])
+
+            experts = layer.mlp.experts
+            expert_ids = range(experts.local_expert_offset, experts.local_expert_offset + experts.num_local_experts)
+            gate_up_src = []
+            down_src = []
+            for expert_id in expert_ids:
+                for proj in ("w1", "w3"):
+                    key = f"{rel_ffn}.experts.{expert_id}.{proj}.weight"
+                    gate_up_src.extend(src_with_scale(key))
+                key = f"{rel_ffn}.experts.{expert_id}.w2.weight"
+                down_src.extend(src_with_scale(key))
+            scripts.extend([
+                Script(
+                    src=gate_up_src,
+                    op=DeepseekV4FlashFP8Dequant()
+                    + DeepseekV4FlashExperts(f"{mlp}.experts.gate_up_proj", gate_up=True),
+                    dst=f"{mlp}.experts.gate_up_proj",
+                ),
+                Script(
+                    src=down_src,
+                    op=DeepseekV4FlashFP8Dequant() + DeepseekV4FlashExperts(f"{mlp}.experts.down_proj", gate_up=False),
+                    dst=f"{mlp}.experts.down_proj",
+                ),
+            ])
+
+        return OnlineReshaper(scripts)
+
     def load_hf_state_dict(self, state_dict, strict=True):
+        if "embed.weight" in state_dict:
+            return self.load_state_dict(self.reshaper.forward(state_dict), strict=strict)
         translated = {}
         for local_key, hf_key in self._hf_key_map.items():
             if hf_key in state_dict:
