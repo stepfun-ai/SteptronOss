@@ -109,9 +109,13 @@ class ResourceConfig(Config):
         found_specs, found_names = {}, {}
 
         def recur_find_task_specs(node: Config):
-            if hasattr(node, "task_specs"):
+            # Avoid Config.__getattribute__ via hasattr(); in some submit-host
+            # environments configurize can raise while probing a missing attr.
+            node_dict = object.__getattribute__(node, "__dict__")
+            task_specs = node_dict.get("task_specs")
+            if task_specs is not None:
                 prefix = node._get_node_name()
-                for k, v in node.task_specs.items():
+                for k, v in task_specs.items():
                     # Compat: ok if both exists but same
                     if k in found_specs and v != found_specs[k]:
                         raise RuntimeError(f"Conflict sub-task name '{k}' in {prefix} and {found_names[k]}!")
