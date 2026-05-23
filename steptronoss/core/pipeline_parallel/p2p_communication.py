@@ -10,6 +10,25 @@ from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import MegatronPPModelConfig
 from steptronoss.timers import get_timers
 
+_MAX_P2P_TENSOR_NDIM = 8
+
+
+def _shape_to_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    shape = tensor.size()
+    if len(shape) > _MAX_P2P_TENSOR_NDIM - 1:
+        raise ValueError(f"P2P tensor ndim={len(shape)} exceeds supported {_MAX_P2P_TENSOR_NDIM - 1}")
+    encoded = torch.zeros(_MAX_P2P_TENSOR_NDIM, device=torch.cuda.current_device(), dtype=torch.int64)
+    encoded[0] = len(shape)
+    encoded[1 : len(shape) + 1] = torch.tensor(shape, device=encoded.device, dtype=encoded.dtype)
+    return encoded
+
+
+def _tensor_to_shape(shape_tensor: torch.Tensor | None) -> list[int]:
+    if shape_tensor is None:
+        return [0, 0, 0]
+    ndim = int(shape_tensor[0].item())
+    return shape_tensor[1 : ndim + 1].tolist()
+
 
 def _communicate_shapes(
     tensor_send_next: torch.Tensor | None,
@@ -40,21 +59,17 @@ def _communicate_shapes(
     send_prev_shape_tensor = None
     send_next_shape_tensor = None
     if recv_prev:
-        recv_prev_shape_tensor = torch.empty((3), device=torch.cuda.current_device(), dtype=torch.int64)
+        recv_prev_shape_tensor = torch.empty(
+            (_MAX_P2P_TENSOR_NDIM), device=torch.cuda.current_device(), dtype=torch.int64
+        )
     if recv_next:
-        recv_next_shape_tensor = torch.empty((3), device=torch.cuda.current_device(), dtype=torch.int64)
+        recv_next_shape_tensor = torch.empty(
+            (_MAX_P2P_TENSOR_NDIM), device=torch.cuda.current_device(), dtype=torch.int64
+        )
     if tensor_send_prev is not None:
-        send_prev_shape_tensor = torch.tensor(
-            tensor_send_prev.size(),
-            device=torch.cuda.current_device(),
-            dtype=torch.int64,
-        )
+        send_prev_shape_tensor = _shape_to_tensor(tensor_send_prev)
     if tensor_send_next is not None:
-        send_next_shape_tensor = torch.tensor(
-            tensor_send_next.size(),
-            device=torch.cuda.current_device(),
-            dtype=torch.int64,
-        )
+        send_next_shape_tensor = _shape_to_tensor(tensor_send_next)
 
     ops = []
     if send_prev_shape_tensor is not None:
@@ -94,13 +109,8 @@ def _communicate_shapes(
     # should take this out once the bug with batch_isend_irecv is resolved.
     torch.cuda.synchronize()
 
-    recv_prev_shape = [0, 0, 0]
-    if recv_prev_shape_tensor is not None:
-        recv_prev_shape = recv_prev_shape_tensor.tolist()
-
-    recv_next_shape = [0, 0, 0]
-    if recv_next_shape_tensor is not None:
-        recv_next_shape = recv_next_shape_tensor.tolist()
+    recv_prev_shape = _tensor_to_shape(recv_prev_shape_tensor)
+    recv_next_shape = _tensor_to_shape(recv_next_shape_tensor)
 
     return recv_prev_shape, recv_next_shape
 
