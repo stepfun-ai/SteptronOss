@@ -229,6 +229,9 @@ class SimpleBenchmarksEvalConfig(GenableEvalConfig):
     max_decode_steps: int = 128 * 1024
     """Maximum generated tokens per request before the request-level context cap is applied."""
 
+    context_budget_margin_tokens: int = 0
+    """Reserve a small token slack when clamping max_tokens against max_model_len."""
+
     num_concurrent_requests: int = 4096
     """Maximum number of in-flight genables allowed across GenerationController."""
 
@@ -348,6 +351,12 @@ class SimpleBenchmarksEvalConfig(GenableEvalConfig):
     def get_prompts(self) -> list[SimpleChatGeneratable]:
         endpoint_getter = EndpointGetter(self.router_addr_key)
         model_name_getter = ModelNameGetter(self.model_name_template)
+        effective_max_model_len = self.max_model_len - self.context_budget_margin_tokens
+        if effective_max_model_len < 1:
+            raise ValueError(
+                f"context_budget_margin_tokens={self.context_budget_margin_tokens} leaves no usable context budget "
+                f"under max_model_len={self.max_model_len}."
+            )
 
         trainables: list[SimpleChatGeneratable] = []
         for benchmark in self.get_benchmarks():
@@ -358,7 +367,7 @@ class SimpleBenchmarksEvalConfig(GenableEvalConfig):
                         case=case,
                         endpoint_getter=endpoint_getter,
                         model_name_getter=model_name_getter,
-                        max_model_len=self.max_model_len,
+                        max_model_len=effective_max_model_len,
                         sampling_params=sampling_params,
                     )
                 )

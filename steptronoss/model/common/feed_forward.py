@@ -3,6 +3,7 @@ from configurize import Config, Ref
 from torch.nn import functional as F
 
 from steptronoss.core import tensor_parallel
+from steptronoss.core.parallel_state import PM
 from steptronoss.exp.base_exp import MegatronTPConfig
 
 
@@ -16,6 +17,12 @@ class FeedForwardConfig(Config):
     rms_norm_zero_gamma: bool
 
     swiglu_recompute_silu_out_proj: bool
+
+    row_parallel_fp32_output_when_tp: bool = False
+    """If true, RowParallelLinear emits fp32 when TP > 1."""
+
+    cast_output_to_input_dtype: bool = False
+    """If true, cast FFN output back to the input dtype before returning."""
 
     def activation(self, x, swiglu_limit=None):
         l, r = torch.chunk(x, 2, dim=-1)
@@ -40,6 +47,8 @@ class FeedForward(torch.nn.Module):
 
         self.activation = self.cfg.activation
         self.fuse_activation_w2 = cfg.swiglu_recompute_silu_out_proj
+        self.cast_output_to_input_dtype = cfg.cast_output_to_input_dtype
+        row_parallel_fp32_output = cfg.row_parallel_fp32_output_when_tp and PM.size_of("TP") > 1
 
         self.w1 = tensor_parallel.ColumnParallelLinear(
             cfg.hidden_size,
@@ -55,6 +64,7 @@ class FeedForward(torch.nn.Module):
             bias=False,
             input_is_parallel=True,
             custom_pre_recompute_function=(self.activation if self.fuse_activation_w2 else None),
+            fp32_output=row_parallel_fp32_output,
             **self.cfg.tp_cfg.get_tp_kwargs(),
         )
 
@@ -65,10 +75,13 @@ class FeedForward(torch.nn.Module):
             return self._forward(x)
 
     def _forward(self, x) -> torch.FloatTensor:
+        input_dtype = x.dtype
         if self.fuse_activation_w2:
             x = self.w1(x)[0]
             output = self.w2(x)[0]
         else:
             x = self.activation(self.w1(x)[0])
             output = self.w2(x)[0]
+        if self.cast_output_to_input_dtype:
+            output = output.to(dtype=input_dtype)
         return output

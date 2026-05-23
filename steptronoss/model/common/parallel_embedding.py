@@ -28,6 +28,14 @@ class OutputEmbeddingConfig(Config):
     fp32_rms_norm: bool
     fp32_lm_head_out: bool = False
     """If true, output LM head logits in fp32."""
+    rms_norm_with_scale: bool = True
+    """If false, construct the output RMSNorm without a learned scale."""
+    rms_norm_math_mode: str = "scripted"
+    """Math path for RMSNorm, e.g. `scripted`, `rsqrt`, or `pow`."""
+    rms_norm_cast_output_to_input_after_mul: bool = False
+    """Cast RMSNorm output back to input dtype after the scale multiply."""
+    final_logit_softcapping: float | None = None
+    """Optional tanh softcap applied to LM logits."""
 
     rms_norm_zero_gamma: bool
     layernorm_epsilon: float
@@ -228,12 +236,16 @@ class OutputEmbedding(torch.nn.Module):
         tied_word_embedding_weight: torch.Tensor | None,
     ):
         super().__init__()
+        self.cfg = cfg
         self.norm = RMSNorm(
             cfg.hidden_size,
             eps=cfg.layernorm_epsilon,
             sequence_parallel=cfg.tp_cfg.sequence_parallel,
             use_fp32=cfg.fp32_rms_norm,
             use_zero_init=cfg.rms_norm_zero_gamma,
+            with_scale=cfg.rms_norm_with_scale,
+            math_mode=cfg.rms_norm_math_mode,
+            cast_output_to_input_after_mul=cfg.rms_norm_cast_output_to_input_after_mul,
         )
         self.output = tensor_parallel.ColumnParallelLinear(
             cfg.hidden_size,
@@ -251,6 +263,8 @@ class OutputEmbedding(torch.nn.Module):
     def forward(self, hidden_states, **kwargs):
         hidden_states = self.norm(hidden_states)
         output = self.output(hidden_states)[0]
+        if self.cfg.final_logit_softcapping is not None:
+            output = torch.tanh(output / self.cfg.final_logit_softcapping) * self.cfg.final_logit_softcapping
         return output
 
 

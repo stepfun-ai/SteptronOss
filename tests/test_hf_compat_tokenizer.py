@@ -123,3 +123,82 @@ def test_load_hf_tokenizer_uses_auto_loader_for_regular_tokenizer(tmp_path, monk
 
     assert isinstance(tokenizer, HFCompatTokenizer)
     assert calls == [("auto", str(tmp_path))]
+
+
+def test_load_hf_tokenizer_normalizes_list_extra_special_tokens_for_gemma_style_exports(tmp_path, monkeypatch):
+    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "tokenizer_config.json").write_text(
+        json.dumps({
+            "tokenizer_class": "GemmaTokenizer",
+            "extra_special_tokens": ["<|video|>", "<|audio|>"],
+        }),
+        encoding="utf-8",
+    )
+
+    captured_kwargs = {}
+
+    class _SentinelTokenizer:
+        def encode(self, text: str, **kwargs):
+            del text, kwargs
+            return []
+
+        def decode(self, token_ids, **kwargs):
+            del token_ids, kwargs
+            return ""
+
+        def apply_chat_template(self, *args, **kwargs):
+            del args, kwargs
+            return []
+
+    def _auto_loader(path, **kwargs):
+        assert str(path) == str(tmp_path)
+        captured_kwargs.update(kwargs)
+        return _SentinelTokenizer()
+
+    monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", _auto_loader)
+
+    tokenizer = load_hf_tokenizer(str(tmp_path))
+
+    assert isinstance(tokenizer, HFCompatTokenizer)
+    assert captured_kwargs["extra_special_tokens"] == {
+        "extra_special_token_0": "<|video|>",
+        "extra_special_token_1": "<|audio|>",
+    }
+
+
+def test_load_hf_tokenizer_only_normalizes_list_of_strings_extra_special_tokens(tmp_path, monkeypatch):
+    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "tokenizer_config.json").write_text(
+        json.dumps({
+            "tokenizer_class": "GemmaTokenizer",
+            "extra_special_tokens": ["<|video|>", 123],
+        }),
+        encoding="utf-8",
+    )
+
+    captured_kwargs = {}
+
+    class _SentinelTokenizer:
+        def encode(self, text: str, **kwargs):
+            del text, kwargs
+            return []
+
+        def decode(self, token_ids, **kwargs):
+            del token_ids, kwargs
+            return ""
+
+        def apply_chat_template(self, *args, **kwargs):
+            del args, kwargs
+            return []
+
+    def _auto_loader(path, **kwargs):
+        assert str(path) == str(tmp_path)
+        captured_kwargs.update(kwargs)
+        return _SentinelTokenizer()
+
+    monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", _auto_loader)
+
+    tokenizer = load_hf_tokenizer(str(tmp_path))
+
+    assert isinstance(tokenizer, HFCompatTokenizer)
+    assert "extra_special_tokens" not in captured_kwargs
