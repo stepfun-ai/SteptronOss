@@ -32,8 +32,9 @@ from playground.data.sft.oss260312.step_sft_data_config0311 import (
     Recipe0311SFTDataConfig,
 )
 from playground.tools.compile_recipe import CompiledDataRecipe, CompiledDatasetsConfig
+import os
 
-COMPILED_ROOT_0311_UNIFIED_STEP3P5_TOKENIZER = "/oss/data/recipe_0311_compiled"
+COMPILED_ROOT_0311_UNIFIED_STEP3P5_TOKENIZER = os.getenv("COMPILED_ROOT_0311_UNIFIED_STEP3P5_TOKENIZER", "/oss/data/recipe_0311_compiled")
 
 
 # Datasets Configs

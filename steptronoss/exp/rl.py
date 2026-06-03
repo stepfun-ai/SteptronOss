@@ -509,11 +509,24 @@ class FullyAsyncFlowControllerConfig(FlowControllerConfig):
 class PPOLikeTrainerConfig(TrainerConfig):
     flow_cfg: FlowControllerConfig = FlowControllerConfig
     """Flow controller config for rollout collection."""
+    use_megatron: bool = False
+    """If True, use Megatron PPOTrainer"""
+
+    hf_policy_model: str | None = None
+    """HuggingFace model id or local path for Megatron-Bridge ``AutoBridge.from_hf_pretrained`` when ``use_megatron`` is True."""
+
+    trust_remote_code: bool = False
+    """Passed to ``AutoBridge.from_hf_pretrained`` when loading the policy checkpoint."""
 
     def get_trainer_cls(self) -> type:
-        from steptronoss.core.trainers.ppo_trainer import PPOTrainer
-
-        return PPOTrainer
+        if self.use_megatron:
+            from steptronoss.core.trainers.megatron_ppo_trainer import MegatronPPOTrainer
+            print(f"for debug, use MegatronPPOTrainer")
+            return MegatronPPOTrainer
+        else:
+            from steptronoss.core.trainers.ppo_trainer import PPOTrainer
+            print(f"for debug, use PPOTrainer")
+            return PPOTrainer
 
     vocab_size = Ref("..tokenizer_cfg.padded_vocab_size")
     build_tokenizer = Ref("..tokenizer_cfg.build_tokenizer")

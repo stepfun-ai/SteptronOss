@@ -24,6 +24,32 @@ def init_weight_callback(cls, init_method="init_model_weight"):
     cls.__init__ = new_init
     return cls
 
+def _print_state_dict_shapes(state_dict_model):
+    def _flatten(obj, prefix):
+        if isinstance(obj, torch.Tensor):
+            logger.info(f"  {prefix}: {list(obj.shape)}")
+        elif isinstance(obj, (list, tuple)):
+            for i, item in enumerate(obj):
+                _flatten(item, f"{prefix}[{i}]")
+        elif isinstance(obj, dict):
+            for k, v in obj.items():
+                _flatten(v, f"{prefix}.{k}" if prefix else k)
+        else:
+            logger.info(f"  {prefix}: <{type(obj).__name__}>")
+
+    logger.info("=== state_dict['model'] tensor shapes ===")
+    _flatten(state_dict_model, "")
+    logger.info("=========================================")
+
+
+def _print_model_shapes(model):
+    logger.info("=== model tensor shapes ===")
+    for name, param in model.named_parameters():
+        logger.info(f"  param {name}: {list(param.shape)}")
+    for name, buf in model.named_buffers():
+        logger.info(f"  buffer {name}: {list(buf.shape)}")
+    logger.info("===========================")
+
 
 def load_model_checkpoint(models, state_dict, strict_load_model=True):
     """Load model checkpoint."""
@@ -40,7 +66,9 @@ def load_model_checkpoint(models, state_dict, strict_load_model=True):
     else:
         load_type = "pt"
 
+    _print_state_dict_shapes(state_dict["model"])
     for vid, model in enumerate(models):
+        _print_model_shapes(model)
         model = unwrap_model(model)
         msg = None
         set_vpp_rank(vid)

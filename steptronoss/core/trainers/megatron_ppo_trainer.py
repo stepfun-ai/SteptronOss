@@ -44,8 +44,165 @@ from steptronoss.utils.rl_utils import (  # PartialRolloutUtils,; TrajManager,; 
     RaggedPPOSampleDumper,
 )
 from steptronoss.utils.utils import get_normalizer
+from steptronoss.core.trainers.megatron_packed_model import MegatronPackedModel
+
+# import for megatron core training
+import argparse
+import os
+from dataclasses import dataclass
+from typing import Iterable, Iterator
+
+import torch
+import torch.nn.functional as F
+from megatron.core.pipeline_parallel import get_forward_backward_func
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+
+from megatron.bridge import AutoBridge
+from megatron.bridge.models.hf_pretrained.utils import is_safe_repo
+from megatron.bridge.models.model_provider import get_model
+from megatron.bridge.training.config import (
+    CheckpointConfig,
+    ConfigContainer,
+    DistributedDataParallelConfig,
+    LoggerConfig,
+    OptimizerConfig,
+    SchedulerConfig,
+    TokenizerConfig,
+    TrainingConfig,
+)
+from megatron.bridge.training.initialize import initialize_megatron, set_jit_fusion_options
+from megatron.bridge.training.optim import setup_optimizer
+
 
 GlobalMetrics: PPOMetricConfig
+
+
+def _describe_structure(x, label: str, depth: int = 0) -> None:
+    pad = "  " * depth
+    if x is None:
+        print(f"{pad}{label}: None")
+    elif isinstance(x, torch.Tensor):
+        print(
+            f"{pad}{label}: Tensor dtype={x.dtype} shape={tuple(x.shape)} "
+            f"device={x.device}"
+        )
+    elif isinstance(x, (bool, int, float)):
+        print(f"{pad}{label}: {type(x).__name__}")
+    elif isinstance(x, str):
+        print(f"{pad}{label}: str(len={len(x)})")
+    elif isinstance(x, (list, tuple)):
+        print(f"{pad}{label}: {type(x).__name__}(len={len(x)})")
+        if len(x) > 0:
+            _describe_structure(x[0], f"{label}[0]", depth + 1)
+            if len(x) > 1:
+                print(f"{pad}  ... ({len(x) - 1} more items)")
+    elif isinstance(x, dict):
+        print(f"{pad}{label}: dict(len={len(x)})")
+        for k in sorted(x.keys(), key=str):
+            _describe_structure(x[k], f"{k!r}", depth + 1)
+    else:
+        d = getattr(x, "__dict__", None)
+        if d is not None:
+            print(f"{pad}{label}: {type(x).__name__}")
+            for k in sorted(d.keys(), key=str):
+                if not str(k).startswith("_"):
+                    _describe_structure(d[k], k, depth + 1)
+        else:
+            print(f"{pad}{label}: {type(x).__name__}")
+
+
+def build_megatron_bridge_container(exp) -> ConfigContainer:
+    """Build ``ConfigContainer`` for Megatron-Bridge from a Steptron PPO experiment."""
+    bridge = AutoBridge.from_hf_pretrained(
+        exp.trainer_cfg.hf_policy_model,
+        trust_remote_code=exp.trainer_cfg.trust_remote_code,
+    )
+    provider = bridge.to_megatron_provider(load_weights=True)
+
+    pc = exp.actor_model_cfg.parallel_cfg
+    provider.tensor_model_parallel_size = pc.tensor_model_parallel_size
+    provider.pipeline_model_parallel_size = pc.pipeline_model_parallel_size
+    provider.context_parallel_size = pc.context_parallel_size
+    provider.seq_length = exp.trainer_cfg.global_seq_length
+    provider.finalize()
+
+    tc = exp.trainer_cfg
+    ac = exp.actor_grad_manager_cfg.optimizer_cfg
+
+    train = TrainingConfig(
+        micro_batch_size=tc.micro_batch_size, # TODO: need to check if this is correct
+        global_batch_size=tc.micro_batch_size,
+        train_iters=tc.train_iters or 1,
+    )
+
+    optimizer = OptimizerConfig(
+        optimizer="adam",
+        lr=float(ac.lr),
+        min_lr=float(ac.lr),
+        weight_decay=float(getattr(ac, "weight_decay", 0.0)),
+        adam_beta1=0.9,
+        adam_beta2=0.95,
+        use_distributed_optimizer=False,
+        bf16=getattr(exp.actor_model_cfg, "params_dtype", torch.bfloat16) == torch.bfloat16,
+    )
+
+    sched = exp.actor_scheduler_cfg
+    lr_decay_iters = getattr(sched, "total_schedule", None) or tc.train_iters or 1
+    scheduler = SchedulerConfig(
+        lr_decay_style="constant",
+        lr_warmup_iters=0,
+        start_weight_decay=0.033,
+        end_weight_decay=0.033,
+        lr_decay_iters=lr_decay_iters,
+        override_opt_param_scheduler=True,
+    )
+
+    ddp = DistributedDataParallelConfig()
+
+    tokenizer = TokenizerConfig(
+        tokenizer_type="HuggingFaceTokenizer",
+        tokenizer_model=exp.trainer_cfg.hf_policy_model,
+    )
+
+    checkpoint = CheckpointConfig(
+        save_interval=0,
+        save=None,
+        load=None,
+        async_save=False,
+        fully_parallel_save=False,
+        fully_parallel_load=False,
+    )
+
+    logger_cfg = LoggerConfig()
+
+    try:
+        cfg = ConfigContainer(
+            model=provider,
+            train=train,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            ddp=ddp,
+            tokenizer=tokenizer,
+            checkpoint=checkpoint,
+            logger=logger_cfg,
+            dataset=None,  # type: ignore[arg-type]
+        )
+    except TypeError:
+        from megatron.bridge.training.config import FinetuningDatasetConfig
+
+        cfg = ConfigContainer(
+            model=provider,
+            train=train,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            ddp=ddp,
+            tokenizer=tokenizer,
+            checkpoint=checkpoint,
+            logger=logger_cfg,
+            dataset=FinetuningDatasetConfig(seq_length=exp.trainer_cfg.global_seq_length),
+        )
+    cfg.validate()
+    return cfg
 
 
 class TrainerPromptStream(Nextable):
@@ -69,7 +226,7 @@ class TrainerPromptStream(Nextable):
         return self.dataloader.load_state_dict(sd)
 
 
-class PPOTrainer(BaseTrainer):
+class MegatronPPOTrainer(BaseTrainer):
     exp: PPOLikeExp
     """Base class for PPO trainer. Access experiment attributes via `self.exp` in trainer."""
 
@@ -110,6 +267,19 @@ class PPOTrainer(BaseTrainer):
 
         for hook in self._after_init_hooks:
             hook(self)
+
+        # Build Megatron-Bridge container   
+        self.megatron_bridge_cfg = build_megatron_bridge_container(self.exp)
+        print(f"for debug, megatron_bridge_cfg: {self.megatron_bridge_cfg}")
+        # Initialize Megatron
+        self.pg_collection = initialize_megatron(
+            cfg=self.megatron_bridge_cfg,
+            # get_embedding_ranks=get_embedding_ranks,
+            # get_position_embedding_ranks=get_position_embedding_ranks,
+            # restart_store=restart_store,
+        )
+        set_jit_fusion_options(self.megatron_bridge_cfg.model, self.megatron_bridge_cfg.train.micro_batch_size)
+
 
     # Functions for Training:
     def train(self):
@@ -156,12 +326,17 @@ class PPOTrainer(BaseTrainer):
             #     if self.iteration % self.ppo_cfg.eval_interval == 0:
             #         if not (self.iteration == 0 and self.ppo_cfg.skip_first_eval):
             #             self.eval()
+
             if self.iteration == 2:
                 torch.cuda.cudart().cudaProfilerStart()
             print(f"for debug, Start training step {self.iteration}...")
+            
             torch.cuda.nvtx.range_push(f"train_step_{self.iteration}")
-
             self.train_step()
+            torch.cuda.nvtx.range_pop()
+            if self.iteration == 4:
+                torch.cuda.cudart().cudaProfilerStop()
+            print(f"for debug, End training step {self.iteration}...")
             for hook in self._after_step_hooks:
                 hook(self)
             elapsed_time = self.timers("interval-time").elapsed(barrier=False, sync_device=True)
@@ -185,10 +360,6 @@ class PPOTrainer(BaseTrainer):
                 torch.cuda.empty_cache()
 
             self.iteration += 1
-            torch.cuda.nvtx.range_pop()
-            if self.iteration == 4:
-                torch.cuda.cudart().cudaProfilerStop()
-            print(f"for debug, End training step {self.iteration}...")
 
     def adapt_trajs_to_samples(self, rollouts: list[EnvTrajectory]) -> list[PPOSample]:
         all_samples = []
@@ -433,6 +604,21 @@ class PPOTrainer(BaseTrainer):
             data = data[: len(data) // pp * pp]
         return data
 
+    @staticmethod
+    def _print_data_list_format(data_list, tag="data_list"):
+        if isinstance(data_list, (list, tuple)):
+            print(f"for debug, {tag} type={type(data_list)}, len={len(data_list)}")
+            for i, item in enumerate(data_list):
+                if isinstance(item, dict):
+                    shapes = {k: v.shape if hasattr(v, "shape") else type(v) for k, v in item.items()}
+                    print(f"for debug, {tag}[{i}] keys={list(item.keys())}, shapes={shapes}")
+                else:
+                    shape = item.shape if hasattr(item, "shape") else "N/A"
+                    print(f"for debug, {tag}[{i}] type={type(item)}, shape={shape}")
+        else:
+            shape = data_list.shape if hasattr(data_list, "shape") else "N/A"
+            print(f"for debug, {tag} type={type(data_list)}, shape={shape}")
+
     def chunk_my_samples(
         self, my_samples: list[PackedPPOSamples], fix_iters: int | None = None
     ) -> list[list[PackedPPOSamples]]:
@@ -445,95 +631,80 @@ class PPOTrainer(BaseTrainer):
         return chunked_data
 
     def train_step(self):
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.generate_trajectory")
         CMT.mark("start_of_iter")
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_actor")
         self.actor.offload_model()
         self.actor.offload_state()
-        torch.cuda.nvtx.range_pop()
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.generate_trajectory")
+        
         all_samples = self.generate_trajectory()
-        torch.cuda.nvtx.range_pop()
         CMT.mark("after_generate_trajectory")
+        torch.cuda.nvtx.range_pop()
 
         self.ppo_cfg.log_generation_metrics(all_samples)
 
         self.ppo_cfg.log_reward_metrics(all_samples)
 
         logger.info("Start filter sampels after reward_fn calc", at=-1)
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.filter_samples")
         all_samples = self.exp.trainer_cfg.filter_samples(all_samples)
-        torch.cuda.nvtx.range_pop()
 
         CMT.mark("before_packing")
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.data_balance_and_pack")
         # Packing samples
         logger.info(f"Start packing {len(all_samples)} samples...", at=-1)
         my_samples = self.data_balance_and_pack(all_samples)
         logger.info(f"Get {len(my_samples)} packed-samples for each DP.", at=-1)
-        torch.cuda.nvtx.range_pop()
         CMT.mark("after_packing")
 
         logger.info("Forward Reference and Actor...", at=-1)
 
         # Only skip reference if all of the following are False: KL penalty, KL loss, and log_logprobs.
         if not self.ppo_cfg.skip_forward_reference:
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_reference_model")
             self.reference_model.backload_model()
-            torch.cuda.nvtx.range_pop()
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.get_reference")
             my_samples = self.get_reference(my_samples)
-            torch.cuda.nvtx.range_pop()
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_reference_model")
             self.reference_model.offload_model()
-            torch.cuda.nvtx.range_pop()
             CMT.mark("after_get_reference")
         # Skip actor forward when onpolicy update and without KL penalty, KL loss, and log_logprobs.
 
         CMT.mark("before_get_actor_logprob")
         if not self.ppo_cfg.skip_forward_actor:
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_actor_model")
             self.actor.backload_model()
-            torch.cuda.nvtx.range_pop()
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.get_actor_logprob")
             my_samples = self.get_actor_logprob(my_samples)
-            torch.cuda.nvtx.range_pop()
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_actor_model")
             self.actor.offload_model()
-            torch.cuda.nvtx.range_pop()
         CMT.mark("after_get_actor_logprob")
 
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_critic_model")
+        if PM.world_rank == 0:
+            print("[get_actor_logprob] my_samples data structure:")
+            _describe_structure(my_samples, "my_samples")
+
         self.critic.backload_model()
-        torch.cuda.nvtx.range_pop()
         if not self.ppo_cfg.onvalue_gae:
             logger.info("Forward Critic...", at=-1)
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.get_values_advantages")
             my_samples = self.get_values_advantages(my_samples)
-            torch.cuda.nvtx.range_pop()
             CMT.mark("after_get_values_advantages")
 
         if self.ppo_cfg.offload_data:
             with self.timers.record("offload_data", log_level=1):
-                torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_data")
                 my_samples = recur_to(my_samples, "cpu")
                 torch.cuda.empty_cache()
-                torch.cuda.nvtx.range_pop()
 
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_critic_state")
         self.critic.backload_state()
-        torch.cuda.nvtx.range_pop()
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.chunk_my_samples")
         critic_chunks = self.chunk_my_samples(my_samples, fix_iters=self.ppo_cfg.fix_iters_critic)
-        torch.cuda.nvtx.range_pop()
+        if PM.world_rank == 0:
+            print("[chunk_my_samples] critic_chunks data structure:")
+            _describe_structure(critic_chunks, "critic_chunks")
+
         GlobalMetrics.grad_norms.enabled = False  # disable for critic model
         with self.timers.record("critic_train", log_level=1):
             for critic_epoch in range(self.ppo_cfg.critic_epoch):
                 GlobalMetrics.inner_iteration.add(float(len(critic_chunks)))
                 logger.info(f"CriticTrain: Ep={critic_epoch} iters={len(critic_chunks)}", at=-1)
                 for iter_data in critic_chunks:
-                    torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.critic_train.forward_backward_iter{self.critic_iteration}")
+                    data_list = self.make_div_pp(iter_data)
+                    if PM.world_rank == 0:
+                        print("[make_div_pp] data_list data structure:")
+                        _describe_structure(data_list, "data_list") 
+                    torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.critic_train.critic.forward_backward_iter{self.critic_iteration}")
                     self.critic.forward_backward(
-                        data_list=self.make_div_pp(iter_data),
+                        data_list=data_list,                      
                         data_proc_fn=self.ppo_cfg.preprocess_generated,
                         loss_fn=self.ppo_cfg.critic_loss_func,
                         training=True,
@@ -562,37 +733,28 @@ class PPOTrainer(BaseTrainer):
 
         if self.ppo_cfg.onvalue_gae:
             # actor data must be subset of critic data!
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.onvalue_gae")
             my_samples = []
             for iter_data in critic_chunks:
                 my_samples.extend(self.make_div_pp(iter_data))
-            torch.cuda.nvtx.range_pop()
+
         # normalize advantages
         with self.timers.record("normalize_advantages", log_level=1):
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.normalize_advantages")
             my_samples = self.normalize_advantages(my_samples)
-            torch.cuda.nvtx.range_pop()
+
         # Actor
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_critic_model")
         self.critic.offload_model()
         self.critic.offload_state()
-        torch.cuda.nvtx.range_pop()
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_actor_model")
         self.actor.backload_model()
         self.actor.backload_state()
-        torch.cuda.nvtx.range_pop()
 
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.chunk_my_samples")
         actor_chunks = self.chunk_my_samples(my_samples, fix_iters=self.ppo_cfg.fix_iters)
-        torch.cuda.nvtx.range_pop()
-
         GlobalMetrics.grad_norms.enabled = self.exp.trainer_cfg.log_detailed_grad_norms
         with self.timers.record("actor_train", log_level=1):
             for actor_epoch in range(self.ppo_cfg.actor_epoch):
                 logger.info(f"ActorTrain: Ep={actor_epoch} iters={len(actor_chunks)}", at=-1)
                 grad_norm = 0
                 for iter_data in actor_chunks:
-                    torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.actor_train.forward_backward_iter{self.actor_iteration}")
+                    torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.actor_train.actor.forward_backward_iter{self.actor_iteration}")
                     self.actor.forward_backward(
                         data_list=self.make_div_pp(iter_data),
                         data_proc_fn=self.ppo_cfg.preprocess_generated,
@@ -602,6 +764,20 @@ class PPOTrainer(BaseTrainer):
                         non_blocking_offload=True,
                         offload_data=self.ppo_cfg.offload_data,
                     )
+                    print(f"for debug, before megatron_bridge_actor.forward_backward,")
+                    _data_list = self.make_div_pp(iter_data)
+                    self._print_data_list_format(_data_list)
+                    print(f"for debug, before megatron_bridge_actor.forward_backward, self.ppo_cfg.offload_optimizer_state: {self.ppo_cfg.offload_optimizer_state}, self.ppo_cfg.offload_data: {self.ppo_cfg.offload_data}")
+                    self.megatron_bridge_actor.forward_backward(
+                        data_list=_data_list,
+                        data_proc_fn=self.ppo_cfg.preprocess_generated,
+                        loss_fn=self.ppo_cfg.actor_loss_func,
+                        training=self.actor_iteration >= self.ppo_cfg.critic_warmup_iters,
+                        offload_opt_while_forward=self.ppo_cfg.offload_optimizer_state,
+                        non_blocking_offload=True,
+                        offload_data=self.ppo_cfg.offload_data,
+                    )
+                    print(f"for debug, after megatron_bridge_actor.forward_backward")
 
                     if self.actor_iteration >= self.ppo_cfg.critic_warmup_iters:
                         (
@@ -624,16 +800,12 @@ class PPOTrainer(BaseTrainer):
                     )
                     self.actor_iteration += 1
                     torch.cuda.nvtx.range_pop()
-
-        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.actor_train.offload_model")
         self.actor.offload_model()
         self.actor.offload_state()
-        torch.cuda.nvtx.range_pop()
+
         if self.ppo_cfg.dump_sample_keys:
-            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.dump_all_samples")
             with self.timers.record("dump_all_samples", log_level=1):
                 self.dump_all_samples(my_samples)
-            torch.cuda.nvtx.range_pop()
 
     def dump_all_samples(self, my_samples: list[PackedPPOSamples]):
         """
@@ -739,6 +911,10 @@ class PPOTrainer(BaseTrainer):
 
             self.actor.offload_state()
         CMT.mark("after_build_actor")
+
+        # Build actor with Megatron-Bridge
+        self.megatron_bridge_actor = MegatronPackedModel(self.megatron_bridge_cfg, training=True, name="megatron_bridge_actor", pg_collection=self.pg_collection)
+        print(f"for debug, megatron_bridge_actor: {self.megatron_bridge_actor}")
 
         with timeit("build_critic_model"):
             if self.exp.critic_model_cfg is not None:
