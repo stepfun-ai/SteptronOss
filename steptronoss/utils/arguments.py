@@ -18,7 +18,7 @@ def parse_args():
     for o in args.opts:
         if "=" not in o:
             continue
-        key, value = o.split("=")
+        key, value = o.split("=", 1)
         try:
             value = ast.literal_eval(value)
         except:

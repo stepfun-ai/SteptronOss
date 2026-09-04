@@ -472,6 +472,8 @@ def get_normalizer(x: torch.Tensor):
     torch.distributed.all_reduce(v, group=PM.group_of("DP"))
     v /= n
     s = torch.sqrt(v)
+    if not (torch.isfinite(m) and torch.isfinite(s)):
+        raise ValueError(f"get_normalizer: non-finite result (mean={m}, std={s}). Input may contain NaN/inf.")
     return m, s
 
 
