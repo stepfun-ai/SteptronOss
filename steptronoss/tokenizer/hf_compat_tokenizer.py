@@ -147,9 +147,44 @@ def _should_use_generic_fast_tokenizer(hf_path: str) -> bool:
     return config.get("tokenizer_class") == "LlamaTokenizerFast"
 
 
+def _normalize_extra_special_tokens_kwargs(hf_path: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    if "extra_special_tokens" in kwargs or not os.path.isdir(hf_path):
+        return kwargs
+
+    tokenizer_config = os.path.join(hf_path, "tokenizer_config.json")
+    if not os.path.isfile(tokenizer_config):
+        return kwargs
+
+    try:
+        with open(tokenizer_config, encoding="utf-8") as fh:
+            config = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return kwargs
+
+    extra_special_tokens = config.get("extra_special_tokens")
+    if (
+        not isinstance(extra_special_tokens, list)
+        or not extra_special_tokens
+        or not all(isinstance(token, str) for token in extra_special_tokens)
+    ):
+        return kwargs
+
+    # HF 4.57.6 expects `extra_special_tokens` to be a name->token mapping in
+    # `_set_model_specific_special_tokens`, but some local tokenizer exports
+    # (for example Gemma 4) serialize it as `list[str]`. Normalize only that
+    # specific incompatible shape so local chat-template-based training can
+    # reuse the tokenizer directory directly.
+    kwargs = dict(kwargs)
+    kwargs["extra_special_tokens"] = {
+        f"extra_special_token_{idx}": token for idx, token in enumerate(extra_special_tokens)
+    }
+    return kwargs
+
+
 def _load_raw_hf_tokenizer(hf_path: str, **kwargs) -> PreTrainedTokenizerBase:
     from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
+    kwargs = _normalize_extra_special_tokens_kwargs(hf_path, kwargs)
     if _should_use_generic_fast_tokenizer(hf_path):
         return PreTrainedTokenizerFast.from_pretrained(hf_path, **kwargs)
     return AutoTokenizer.from_pretrained(hf_path, **kwargs)

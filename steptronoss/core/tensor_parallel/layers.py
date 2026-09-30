@@ -866,6 +866,7 @@ class RowParallelLinear(torch.nn.Module):
         use_moe: bool = False,
         parallel_output: bool = False,
         custom_pre_recompute_function=None,
+        fp32_output: bool = False,
     ):
         super(RowParallelLinear, self).__init__()
 
@@ -886,6 +887,7 @@ class RowParallelLinear(torch.nn.Module):
         self.use_moe = use_moe
         self.parallel_output = parallel_output
         self.custom_pre_recompute_function = custom_pre_recompute_function
+        self.fp32_output = fp32_output
 
         # Parameters.
         # Note: torch.nn.functional.linear performs XA^T + b and as a result
@@ -949,6 +951,7 @@ class RowParallelLinear(torch.nn.Module):
             use_moe=self.use_moe,
             custom_pre_recompute_function=self.custom_pre_recompute_function,
             custom_pre_recompute_function_input=custom_pre_recompute_function_input,
+            fp32_output=self.fp32_output,
         )
 
         # if enable overlap, the reduce-scatter is already done in the previous op
