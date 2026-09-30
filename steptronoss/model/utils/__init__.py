@@ -1,3 +1,8 @@
+from .glm5_utils import (
+    generate_varlen_mask_params,
+    lighting_indexer,
+    sparse_mla,
+)
 from .moe_utils import (
     MoEGateFunction,
     MoEScatter,

@@ -34,8 +34,14 @@ class VLLMDeployConfig(BaseInferenceConfig):
 
     vllm_dp: int = 1
     """Attention data parallel size; useful for deepseek v3 series of model; default to 1"""
+    multi_node_serving: bool = False
+    """If True, launch one distributed vLLM instance across multiple task replicas."""
+    distributed_executor_backend: str | None = None
+    """Optional explicit distributed executor backend passed through to vLLM."""
     enable_expert_parallel: bool = False
     """If True, will do expert parallel inference (for MoE models). EP=(TPxDP) by default for vllm."""
+    all2all_backend: str | None = None
+    """Optional vLLM MoE all2all backend such as `deepep_high_throughput`."""
 
     vllm_gpu_memory_utilization: float = 0.95
     vllm_enable_chunked_prefill: bool = True  # Better enable chunked prefill
@@ -69,6 +75,9 @@ class VLLMDeployConfig(BaseInferenceConfig):
 
     vllm_hf_overrides: dict = {}
     """The hf_overrides to use to override the model config in huggingface for vLLM."""
+
+    compilation_config: dict | None = None
+    """Optional vLLM compilation config passed through as --compilation-config JSON."""
 
     vllm_mtp_num_tokens: int = 0
     vllm_mtp_method: str = ""
@@ -107,6 +116,7 @@ class VLLMDeployConfig(BaseInferenceConfig):
     def get_entrypoint_command_and_envs(self):
 
         import json
+        import os
 
         envs = {}
 
@@ -117,6 +127,7 @@ class VLLMDeployConfig(BaseInferenceConfig):
             f"--served-model-name {self.model_name}",
             f"--max-model-len {self.max_seq_len}",
             f"--tensor-parallel-size {self.vllm_tp}",
+            f"--pipeline-parallel-size {self.vllm_pp}",
             f"--gpu-memory-utilization {self.vllm_gpu_memory_utilization}",
             f"--max-num-seqs {self.max_cache_size}",
             f"--data-parallel-size {self.vllm_dp}",
@@ -124,6 +135,18 @@ class VLLMDeployConfig(BaseInferenceConfig):
             "--disable-cascade-attn",  # might meet cuda IMA error when using cascade attention
             "--disable-uvicorn-access-log",
         ]
+        runtime_nnodes = int(os.environ.get("VLLM_NNODES", os.environ.get("NNODES", "1")))
+        if self.multi_node_serving and runtime_nnodes > 1:
+            cmd.extend([
+                f"--nnodes {runtime_nnodes}",
+                f"--node-rank {int(os.environ['VLLM_NODE_RANK'])}",
+                f"--master-addr {os.environ['VLLM_MASTER_ADDR']}",
+                f"--master-port {int(os.environ['VLLM_MASTER_PORT'])}",
+            ])
+            if int(os.environ.get("VLLM_NODE_RANK", "0")) > 0:
+                cmd.append("--headless")
+        if self.distributed_executor_backend:
+            cmd.append(f"--distributed-executor-backend {self.distributed_executor_backend}")
         if self.vllm_hf_overrides:
             overrides = json.dumps(self.vllm_hf_overrides)
             envs["HF_OVERRIDES"] = f"'{overrides}'"
@@ -157,6 +180,8 @@ class VLLMDeployConfig(BaseInferenceConfig):
             cmd.append("--enable-log-requests")
         if self.enable_expert_parallel:
             cmd.append("--enable-expert-parallel")
+        if self.all2all_backend:
+            cmd.append(f"--all2all-backend {self.all2all_backend}")
         if self.vllm_mtp_num_tokens > 0:
             vllm_speculative_config = json.dumps({
                 "num_speculative_tokens": self.vllm_mtp_num_tokens,
@@ -164,6 +189,10 @@ class VLLMDeployConfig(BaseInferenceConfig):
             })
             envs["SPECULATIVE_CONFIG"] = f"'{vllm_speculative_config}'"
             cmd.append("--speculative-config $SPECULATIVE_CONFIG")
+        if self.compilation_config:
+            compilation_config_json = json.dumps(self.compilation_config)
+            envs["COMPILATION_CONFIG"] = f"'{compilation_config_json}'"
+            cmd.append("--compilation-config $COMPILATION_CONFIG")
 
         cmd = " ".join(cmd)
 

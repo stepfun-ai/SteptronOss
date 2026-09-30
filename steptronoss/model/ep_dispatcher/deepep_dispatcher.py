@@ -68,16 +68,27 @@ class DeepEPDispatcher:
         self._cached_recv_token_probs = None
         self._cached_token_sig = None
 
+    def _should_query_rdma_size_hint(self) -> bool:
+        # DeepEP intranode dispatch (world_size <= 8) uses only NVLink buffers
+        # unless low-latency mode is enabled. Querying the RDMA hint there is
+        # both unnecessary and can trip DeepEP builds compiled without NVSHMEM.
+        return self._low_latency_mode or self.world_size > 8
+
     def _ensure_buffer(self, hidden_bytes: int) -> Buffer:
         # Use DeepEP size hints to grow buffers if needed.
         num_nvl_bytes = self._buffer_nvl_bytes
-        num_rdma_bytes = self._buffer_rdma_bytes
+        use_rdma_hint = self._should_query_rdma_size_hint()
+        num_rdma_bytes = self._buffer_rdma_bytes if use_rdma_hint else 0
         for config in (
             Buffer.get_dispatch_config(self.world_size),
             Buffer.get_combine_config(self.world_size),
         ):
             num_nvl_bytes = max(config.get_nvl_buffer_size_hint(hidden_bytes, self.world_size), num_nvl_bytes)
-            num_rdma_bytes = max(config.get_rdma_buffer_size_hint(hidden_bytes, self.world_size), num_rdma_bytes)
+            if use_rdma_hint:
+                num_rdma_bytes = max(
+                    config.get_rdma_buffer_size_hint(hidden_bytes, self.world_size),
+                    num_rdma_bytes,
+                )
 
         if (
             self._buffer is None

@@ -160,10 +160,10 @@ class GradientManager(ABC):
         pass
 
     def _cpu_offload(self):
-        self.to_device("cpu")
+        self.to_device("cpu", non_blocking=True)
 
     def _cpu_backload(self):
-        self.to_device("cuda")
+        self.to_device("cuda", non_blocking=True)
 
     def _custom_allreduce(self, tag, group, op) -> None:
         grads = []

@@ -20,8 +20,13 @@ from steptronoss.utils.comm_utils import get_exp_redis
 
 class RlaunchDistibuteManager:
     def __init__(self):
-        self.nr_gpus = torch.cuda.device_count()
-        self.proc_per_node = max(self.nr_gpus, 1)
+        proc_per_node = os.environ.get("NPROC_PER_NODE") or os.environ.get("PROC_PER_NODE")
+        if proc_per_node is not None:
+            self.proc_per_node = int(proc_per_node)
+            self.nr_gpus = self.proc_per_node
+        else:
+            self.nr_gpus = torch.cuda.device_count()
+            self.proc_per_node = max(self.nr_gpus, 1)
 
         self.exp_id = str(os.environ["EXP_ID"]).replace("/", "_")
 

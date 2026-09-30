@@ -147,6 +147,12 @@ Improve pass:
   - `AdamConfig`
   - constant / linear / cosine schedulers
   - checkpoint config (`SaveOptions`, `LoadOptions`, `CheckpointConfig`)
+- GLM-5 support lives in `playground/pretrain/glm5/glm5.py`, `steptronoss/model/glm5.py`, and `playground/sft/glm5/`; the single-node toy path is `playground/pretrain/glm5/glm5_toy.py` + `playground/sft/glm5/glm5_toy_sft_step3_data.py`.
+- Historical one-off GLM-5 parity/debug scripts under `playground/pretrain/glm5/` were cleared after the investigation; keep trace details in `WORKLOG.md`, not `AGENTS.md`.
+- In GLM-5 MoE comparisons, HF `route_tokens_to_experts()` returns top-k weights already multiplied by `routed_scaling_factor`, while StepTron `MoEBlock.forward_router()` returns normalized unscaled weights and applies the scale only after expert combine.
+- For parallel GLM-5 grad checks, `model.reshaper.backward()` can fail with `AssertionError: Breaking duplicate!`; compare representative direct grads instead, and manually gather `out_embeddings.output.weight.grad` across TP when needed.
+- GLM-5 uses its own `Glm5YARNRoPE` instead of the generic `YARNRoPE` because it needs GLM-specific inv-freq bf16 quantization plus input-dtype RoPE apply semantics; GLM-5 MLA-inner RMSNorms should stay at `mla_layernorm_epsilon = 1e-6` while surrounding norms stay at `1e-5`.
+- For non-packed GLM-5 attention, the DSA indexer still needs a causal mask: `_build_indexer_mask()` should mirror `_build_final_attention_mask()` even when `cu_seqlens is None`.
 
 ### Experiment workflow
 

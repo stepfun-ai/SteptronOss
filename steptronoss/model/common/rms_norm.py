@@ -3,8 +3,8 @@ import torch.nn as nn
 
 
 @torch.jit.script
-def rms_foward(x):
-    l2_norm_inv = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-5)
+def rms_foward(x, eps: float):
+    l2_norm_inv = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
     y = x * l2_norm_inv
     return y, l2_norm_inv
 
@@ -19,8 +19,8 @@ def rms_backward(grad_y, y, l2_norm_inv):
 
 class RMSNormFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x):
-        y, l2_norm_inv = rms_foward(x)
+    def forward(ctx, x, eps: float):
+        y, l2_norm_inv = rms_foward(x, eps)
         ctx.save_for_backward(y, l2_norm_inv)
         return y
 
@@ -28,7 +28,7 @@ class RMSNormFunction(torch.autograd.Function):
     def backward(ctx, grad_y):
         y, l2_norm_inv = ctx.saved_variables
         gx = rms_backward(grad_y, y, l2_norm_inv)
-        return gx
+        return gx + (None,)
 
 
 class RMSNorm(nn.Module):
@@ -56,7 +56,7 @@ class RMSNorm(nn.Module):
         weight = self.weight + self.bias
 
         if self.use_fp32:
-            y = RMSNormFunction.apply(x.float()).type_as(x)
+            y = RMSNormFunction.apply(x.float(), self.eps).type_as(x)
         else:
-            y = RMSNormFunction.apply(x)
+            y = RMSNormFunction.apply(x, self.eps)
         return y * weight
