@@ -69,10 +69,10 @@ class Exp(BaseExp):
             routed_grouped_ffn="fused",
             moe_weighted_gather="triton",
             TokenDispatcher="deep_ep",
-            grouped_gemm="nv_grouped_gemm",
-            AttentionCore="flash-attn-3",
         )
 
+            # grouped_gemm="nv_grouped_gemm",
+            # AttentionCore="flash-attn-3",
 
 if __name__ == "__main__":
     Exp().train()

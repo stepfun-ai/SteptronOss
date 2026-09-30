@@ -156,6 +156,10 @@ class PPOTrainer(BaseTrainer):
             #     if self.iteration % self.ppo_cfg.eval_interval == 0:
             #         if not (self.iteration == 0 and self.ppo_cfg.skip_first_eval):
             #             self.eval()
+            if self.iteration == 2:
+                torch.cuda.cudart().cudaProfilerStart()
+            print(f"for debug, Start training step {self.iteration}...")
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}")
 
             self.train_step()
             for hook in self._after_step_hooks:
@@ -181,6 +185,10 @@ class PPOTrainer(BaseTrainer):
                 torch.cuda.empty_cache()
 
             self.iteration += 1
+            torch.cuda.nvtx.range_pop()
+            if self.iteration == 4:
+                torch.cuda.cudart().cudaProfilerStop()
+            print(f"for debug, End training step {self.iteration}...")
 
     def adapt_trajs_to_samples(self, rollouts: list[EnvTrajectory]) -> list[PPOSample]:
         all_samples = []
@@ -438,9 +446,13 @@ class PPOTrainer(BaseTrainer):
 
     def train_step(self):
         CMT.mark("start_of_iter")
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_actor")
         self.actor.offload_model()
         self.actor.offload_state()
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.generate_trajectory")
         all_samples = self.generate_trajectory()
+        torch.cuda.nvtx.range_pop()
         CMT.mark("after_generate_trajectory")
 
         self.ppo_cfg.log_generation_metrics(all_samples)
@@ -448,51 +460,78 @@ class PPOTrainer(BaseTrainer):
         self.ppo_cfg.log_reward_metrics(all_samples)
 
         logger.info("Start filter sampels after reward_fn calc", at=-1)
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.filter_samples")
         all_samples = self.exp.trainer_cfg.filter_samples(all_samples)
+        torch.cuda.nvtx.range_pop()
 
         CMT.mark("before_packing")
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.data_balance_and_pack")
         # Packing samples
         logger.info(f"Start packing {len(all_samples)} samples...", at=-1)
         my_samples = self.data_balance_and_pack(all_samples)
         logger.info(f"Get {len(my_samples)} packed-samples for each DP.", at=-1)
+        torch.cuda.nvtx.range_pop()
         CMT.mark("after_packing")
 
         logger.info("Forward Reference and Actor...", at=-1)
 
         # Only skip reference if all of the following are False: KL penalty, KL loss, and log_logprobs.
         if not self.ppo_cfg.skip_forward_reference:
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_reference_model")
             self.reference_model.backload_model()
+            torch.cuda.nvtx.range_pop()
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.get_reference")
             my_samples = self.get_reference(my_samples)
+            torch.cuda.nvtx.range_pop()
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_reference_model")
             self.reference_model.offload_model()
+            torch.cuda.nvtx.range_pop()
             CMT.mark("after_get_reference")
         # Skip actor forward when onpolicy update and without KL penalty, KL loss, and log_logprobs.
 
         CMT.mark("before_get_actor_logprob")
         if not self.ppo_cfg.skip_forward_actor:
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_actor_model")
             self.actor.backload_model()
+            torch.cuda.nvtx.range_pop()
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.get_actor_logprob")
             my_samples = self.get_actor_logprob(my_samples)
+            torch.cuda.nvtx.range_pop()
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_actor_model")
             self.actor.offload_model()
+            torch.cuda.nvtx.range_pop()
         CMT.mark("after_get_actor_logprob")
 
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_critic_model")
         self.critic.backload_model()
+        torch.cuda.nvtx.range_pop()
         if not self.ppo_cfg.onvalue_gae:
             logger.info("Forward Critic...", at=-1)
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.get_values_advantages")
             my_samples = self.get_values_advantages(my_samples)
+            torch.cuda.nvtx.range_pop()
             CMT.mark("after_get_values_advantages")
 
         if self.ppo_cfg.offload_data:
             with self.timers.record("offload_data", log_level=1):
+                torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_data")
                 my_samples = recur_to(my_samples, "cpu")
                 torch.cuda.empty_cache()
+                torch.cuda.nvtx.range_pop()
 
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_critic_state")
         self.critic.backload_state()
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.chunk_my_samples")
         critic_chunks = self.chunk_my_samples(my_samples, fix_iters=self.ppo_cfg.fix_iters_critic)
+        torch.cuda.nvtx.range_pop()
         GlobalMetrics.grad_norms.enabled = False  # disable for critic model
         with self.timers.record("critic_train", log_level=1):
             for critic_epoch in range(self.ppo_cfg.critic_epoch):
                 GlobalMetrics.inner_iteration.add(float(len(critic_chunks)))
                 logger.info(f"CriticTrain: Ep={critic_epoch} iters={len(critic_chunks)}", at=-1)
                 for iter_data in critic_chunks:
+                    torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.critic_train.forward_backward_iter{self.critic_iteration}")
                     self.critic.forward_backward(
                         data_list=self.make_div_pp(iter_data),
                         data_proc_fn=self.ppo_cfg.preprocess_generated,
@@ -519,30 +558,41 @@ class PPOTrainer(BaseTrainer):
                     )
                     GlobalMetrics.critic_grad_norm.add(grad_norm)
                     self.critic_iteration += 1
+                    torch.cuda.nvtx.range_pop()
 
         if self.ppo_cfg.onvalue_gae:
             # actor data must be subset of critic data!
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.onvalue_gae")
             my_samples = []
             for iter_data in critic_chunks:
                 my_samples.extend(self.make_div_pp(iter_data))
-
+            torch.cuda.nvtx.range_pop()
         # normalize advantages
         with self.timers.record("normalize_advantages", log_level=1):
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.normalize_advantages")
             my_samples = self.normalize_advantages(my_samples)
-
+            torch.cuda.nvtx.range_pop()
         # Actor
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.offload_critic_model")
         self.critic.offload_model()
         self.critic.offload_state()
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.backload_actor_model")
         self.actor.backload_model()
         self.actor.backload_state()
+        torch.cuda.nvtx.range_pop()
 
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.chunk_my_samples")
         actor_chunks = self.chunk_my_samples(my_samples, fix_iters=self.ppo_cfg.fix_iters)
+        torch.cuda.nvtx.range_pop()
+
         GlobalMetrics.grad_norms.enabled = self.exp.trainer_cfg.log_detailed_grad_norms
         with self.timers.record("actor_train", log_level=1):
             for actor_epoch in range(self.ppo_cfg.actor_epoch):
                 logger.info(f"ActorTrain: Ep={actor_epoch} iters={len(actor_chunks)}", at=-1)
                 grad_norm = 0
                 for iter_data in actor_chunks:
+                    torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.actor_train.forward_backward_iter{self.actor_iteration}")
                     self.actor.forward_backward(
                         data_list=self.make_div_pp(iter_data),
                         data_proc_fn=self.ppo_cfg.preprocess_generated,
@@ -573,12 +623,17 @@ class PPOTrainer(BaseTrainer):
                         lr=lr,
                     )
                     self.actor_iteration += 1
+                    torch.cuda.nvtx.range_pop()
+
+        torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.actor_train.offload_model")
         self.actor.offload_model()
         self.actor.offload_state()
-
+        torch.cuda.nvtx.range_pop()
         if self.ppo_cfg.dump_sample_keys:
+            torch.cuda.nvtx.range_push(f"train_step_{self.iteration}.dump_all_samples")
             with self.timers.record("dump_all_samples", log_level=1):
                 self.dump_all_samples(my_samples)
+            torch.cuda.nvtx.range_pop()
 
     def dump_all_samples(self, my_samples: list[PackedPPOSamples]):
         """

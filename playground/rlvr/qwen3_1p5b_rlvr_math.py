@@ -334,12 +334,12 @@ class Exp(PPOLikeExp):
         self.trainer_cfg.fix_iters = 1
         self.trainer_cfg.fix_iters_critic = 1
 
-        self.checkpoint_cfg.actor.load_safetensors = "/oss/opensources_model/Qwen3-1.7B/"
-        self.checkpoint_cfg.critic.load_safetensors = "/oss/opensources_model/Qwen3-1.7B/"
+        self.checkpoint_cfg.actor.load_safetensors = "/oss-dev/opensources_model/Qwen3-1.7B/"
+        self.checkpoint_cfg.critic.load_safetensors = "/oss-dev/opensources_model/Qwen3-1.7B/"
         self.checkpoint_cfg.critic.strict_load_model = False
-        self.checkpoint_cfg.reference.load_safetensors = "/oss/opensources_model/Qwen3-1.7B/"
+        self.checkpoint_cfg.reference.load_safetensors = "/oss-dev/opensources_model/Qwen3-1.7B/"
 
-        self.checkpoint_cfg.save_path = "/oss/checkpoints/qwen3_1p5b_rlvr_math"
+        self.checkpoint_cfg.save_path = "/oss-dev/checkpoints/qwen3_1p5b_rlvr_math"
         self.checkpoint_cfg.save_interval = 50
 
     def entrypoint(self):
@@ -360,4 +360,7 @@ class Exp(PPOLikeExp):
 
 
 if __name__ == "__main__":
-    Exp().entrypoint()
+      # make sure cli args are applied before entrypoint
+      exp = Exp()                                                                                                                                                                                                                         
+      exp.update_from_args()
+      exp.entrypoint()
