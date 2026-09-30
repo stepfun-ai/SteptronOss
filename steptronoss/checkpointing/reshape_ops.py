@@ -587,6 +587,10 @@ class OnlineReshaper(ReshapeOp):
             patterns = [patterns]
         matched = set()
         for pattern in patterns:
+            if not any(ch in pattern for ch in "*?["):
+                if pattern in weights:
+                    matched.add(pattern)
+                continue
             pattern = translate(pattern)
             for k in weights:
                 if re.match(pattern, k):
