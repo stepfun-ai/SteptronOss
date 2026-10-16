@@ -21,6 +21,7 @@
 - SFT data prep (ZH): `docs/SFT_DATA_PREPARATION.md`
 - SFT data prep (EN): `docs/SFT_DATA_PREPARATION_EN.md`
 - API modules: `docs/MODULES.md`
+- [Qwen hybrid-model text LoRA with DP, FSDP2 and context parallelism](docs/QWEN_LORA.md)
 
 ## Installation
 

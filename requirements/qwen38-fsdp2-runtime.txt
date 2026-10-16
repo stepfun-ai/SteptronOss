@@ -1,0 +1,31 @@
+# Install torch>=2.11 separately from an index matching the GPU/CUDA environment.
+# Keep this isolated from the default vLLM environment and its torch constraints.
+transformers==5.19.0
+peft==0.21.2
+accelerate>=1.0
+configurize==0.2.0
+aiohttp
+aioredis
+emoji
+boto3
+diskcache
+einops
+fastapi
+hjson
+ijson
+loguru
+megfile
+msgpack
+nltk
+numpy
+pyyaml
+redis
+safetensors
+syllapy
+tabulate
+tqdm
+uvicorn
+wandb
+httpx[socks]
+tensorboard
+asciichartpy
